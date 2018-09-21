@@ -23,22 +23,22 @@ from hyperspy.component import Component
 
 class Lorentzian(Component):
 
-    """Cauchy-Lorentz distribution (a.k.a. Lorentzian function) component
+    r"""Cauchy-Lorentz distribution (a.k.a. Lorentzian function) component
 
     .. math::
 
-        f(x)=\\frac{a}{\pi}\left[\\frac{\gamma}{\left(x-x_{0}\\right)^{2}+\gamma^{2}}\\right]
+        f(x)=\frac{a}{\pi}\left[\frac{\gamma}{\left(x-x_{0}\right)^{2}+\gamma^{2}}\right]
 
-    +------------+-----------+
-    | Parameter  | Attribute |
-    +------------+-----------+
-    +------------+-----------+
-    |     a      |     A     |
-    +------------+-----------+
-    |   gamma    |   gamma   |
-    +------------+-----------+
-    |    x0      |  centre   |
-    +------------+-----------+
+    +---------------------+-----------+
+    |     Parameter       | Attribute |
+    +---------------------+-----------+
+    +---------------------+-----------+
+    |      :math:`a`      |     A     |
+    +---------------------+-----------+
+    |    :math:`\gamma`   |   gamma   |
+    +---------------------+-----------+
+    |      :math:`x_0`    |  centre   |
+    +---------------------+-----------+
 
     """
 
@@ -63,12 +63,18 @@ class Lorentzian(Component):
         self.gamma.grad = self.grad_gamma
         self.centre.grad = self.grad_centre
 
-    def function(self, x):
-        """
-        """
-        A = self.A.value
-        gamma = self.gamma.value
-        centre = self.centre.value
+        # Linearity
+        self.A._is_linear = True
+
+    def function(self, x, multi=False):
+        if multi:
+            A = self.A.map['values'][...,None]
+            gamma = self.gamma.map['values'][...,None]
+            centre = self.centre.map['values'][...,None]
+        else:
+            A = self.A.value
+            gamma = self.gamma.value
+            centre = self.centre.value
 
         return A / np.pi * (gamma / ((x - centre) ** 2 + gamma ** 2))
 
@@ -86,6 +92,6 @@ class Lorentzian(Component):
     def grad_centre(self, x):
         """
         """
-        return (2 * (x - self.centre.value) * self.A.value * self.gamma.value ) / \
+        return (2 * (x - self.centre.value) * self.A.value * self.gamma.value) / \
             (np.pi *
              (self.gamma.value ** 2 + (x - self.centre.value) ** 2) ** 2)

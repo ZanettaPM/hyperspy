@@ -38,17 +38,25 @@ class Exponential(Component):
 
     """
 
-    def __init__(self):
+    def __init__(self, A=1, tau=1):
         Component.__init__(self, ['A', 'tau'])
+        self.A.value = A
+        self.tau.value = tau
+        
         self.isbackground = False
         self.A.grad = self.grad_A
         self.tau.grad = self.grad_tau
 
-    def function(self, x):
-        """
-        """
-        A = self.A.value
-        tau = self.tau.value
+        # Linearity
+        self.A._is_linear = True
+
+    def function(self, x, multi=False):
+        if multi:
+            A = self.A.map['values'][...,None]
+            tau = self.tau.map['values'][...,None]
+        else:
+            A = self.A.value
+            tau = self.tau.value
         return A * np.exp(-x / tau)
 
     def grad_A(self, x):
