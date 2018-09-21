@@ -26,7 +26,7 @@ class Offset(Component):
 
     """Component to add a constant value in the y-axis
 
-    f(x) = k + x
+    f(x) = k
 
     +------------+-----------+
     | Parameter  | Attribute |
@@ -48,8 +48,17 @@ class Offset(Component):
         # Gradients
         self.offset.grad = self.grad_offset
 
-    def function(self, x):
-        return np.ones((len(x))) * self.offset.value
+        # Linearity
+        self.offset._is_linear = True
+
+        self._constant_parameters = [self.offset]
+
+    def function(self, x, multi=False):
+        if multi:
+            o = self.offset.map['values'][...,None]
+        else:
+            o = self.offset.value
+        return np.ones((len(x))) * o
 
     @staticmethod
     def grad_offset(x):
@@ -98,3 +107,14 @@ class Offset(Component):
             self.offset.map['is_set'][:] = True
             self.fetch_stored_values()
             return True
+
+    def get_constant_term(self, multi=False):
+        "Get value of constant term of component"
+        # First get currently constant parameters
+        if self.offset.free:
+            return 0
+        else:
+            if multi:
+                return self.offset.map['values']
+            else:
+                return self.offset.value

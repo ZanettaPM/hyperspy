@@ -23,22 +23,24 @@ from hyperspy.component import Component
 
 class VolumePlasmonDrude(Component):
 
-    r"""Drude volume plasmon energy loss function component, the energy loss 
+    r"""Drude volume plasmon energy loss function component, the energy loss
     function is defined as:
 
     .. math::
 
-       f(E) = \frac{E(\Delta E_p)E_p^2}{(E^2-E_p^2)^2+(E\Delta E_p)^2}
+       Energy loss function defined as:
 
-    +------------------+-----------------+
-    | Parameter        |    Attribute    |
-    +------------------+-----------------+
-    |:math:`E_p`       |  plasmon_energy |
-    +------------------+-----------------+
-    |:math:`\Delta E_p`|      fwhm       |
-    +------------------+-----------------+
-    | intensity        |   intensity     |
-    +------------------+-----------------+
+       f(E) = \\frac{E(\Delta E_p)E_p^2}{(E^2-E_p^2)^2+(E\Delta E_p)^2}
+
+    +------------+-----------------+
+    | Parameter  |    Attribute    |
+    +------------+-----------------+
+    |    E_p     |  plasmon_energy |
+    +------------+-----------------+
+    | delta_E_p  |      fwhm       |
+    +------------+-----------------+
+    | intensity  |    intensity    |
+    +------------+-----------------+
 
     Notes
     -----
@@ -60,10 +62,18 @@ class VolumePlasmonDrude(Component):
         self.fwhm.grad = self.grad_fwhm
         self.intensity.grad = self.grad_intensity
 
-    def function(self, x):
-        plasmon_energy = self.plasmon_energy.value
-        fwhm = self.fwhm.value
-        intensity = self.intensity.value
+        # Linearity
+        self.intensity._is_linear = True
+
+    def function(self, x, multi=False):
+        if multi:
+            plasmon_energy = self.plasmon_energy.map['values'][...,None]
+            fwhm = self.fwhm.map['values'][...,None]
+            intensity = self.intensity.map['values'][...,None]
+        else:
+            plasmon_energy = self.plasmon_energy.value
+            fwhm = self.fwhm.value
+            intensity = self.intensity.value
         pe2 = plasmon_energy ** 2
         return np.where(
             x > 0,

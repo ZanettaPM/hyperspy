@@ -63,12 +63,18 @@ class Lorentzian(Component):
         self.gamma.grad = self.grad_gamma
         self.centre.grad = self.grad_centre
 
-    def function(self, x):
-        """
-        """
-        A = self.A.value
-        gamma = self.gamma.value
-        centre = self.centre.value
+        # Linearity
+        self.A._is_linear = True
+
+    def function(self, x, multi=False):
+        if multi:
+            A = self.A.map['values'][...,None]
+            gamma = self.gamma.map['values'][...,None]
+            centre = self.centre.map['values'][...,None]
+        else:
+            A = self.A.value
+            gamma = self.gamma.value
+            centre = self.centre.value
 
         return A / np.pi * (gamma / ((x - centre) ** 2 + gamma ** 2))
 

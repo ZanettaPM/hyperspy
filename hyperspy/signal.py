@@ -2138,12 +2138,12 @@ class BaseSignal(FancySlicing,
 
     def _replot(self):
         if self._plot is not None:
-            if self._plot.is_active() is True:
+            if self._plot.is_active:
                 self.plot()
 
     def update_plot(self):
         if self._plot is not None:
-            if self._plot.is_active() is True:
+            if self._plot.is_active:
                 if self._plot.signal_plot is not None:
                     self._plot.signal_plot.update()
                 if self._plot.navigator_plot is not None:
@@ -2735,6 +2735,46 @@ class BaseSignal(FancySlicing,
             getitem[unfolded_axis] = i
             yield(data[tuple(getitem)])
 
+    def _cycle_signal(self):
+        """Cycles over the signal data.
+
+        It is faster than using the signal iterator.
+
+        Warning! could produce a infinite loop.
+
+        """
+        if self.axes_manager.navigation_size < 2:
+            while True:
+                yield self()
+            return
+        self._make_sure_data_is_contiguous()
+        axes = [axis.index_in_array for
+                axis in self.axes_manager.signal_axes]
+        if axes:
+            unfolded_axis = (
+                self.axes_manager.navigation_axes[0].index_in_array)
+            new_shape = [1] * len(self.data.shape)
+            for axis in axes:
+                new_shape[axis] = self.data.shape[axis]
+            new_shape[unfolded_axis] = -1
+        else:  # signal_dimension == 0
+            new_shape = (-1, 1)
+            axes = [1]
+            unfolded_axis = 0
+        # Warning! if the data is not contigous it will make a copy!!
+        data = self.data.reshape(new_shape)
+        getitem = [0] * len(data.shape)
+        for axis in axes:
+            getitem[axis] = slice(None)
+        i = 0
+        Ni = data.shape[unfolded_axis]
+        while True:
+            getitem[unfolded_axis] = i
+            yield(data[tuple(getitem)])
+            i += 1
+            if i == Ni:
+                i = 0
+
     def _remove_axis(self, axes):
         am = self.axes_manager
         axes = am[axes]
@@ -2758,6 +2798,7 @@ class BaseSignal(FancySlicing,
         # the axes since the function will consume it/them.
         if not np.iterable(ar_axes):
             ar_axes = (ar_axes,)
+
         ar_axes = sorted(ar_axes)
         new_shape = list(self.data.shape)
         for index in ar_axes[1:]:
@@ -2784,11 +2825,22 @@ class BaseSignal(FancySlicing,
         axes = self.axes_manager[axes]
         if not np.iterable(axes):
             axes = (axes,)
+
         # Use out argument in numpy function when available for operations that
         # do not return scalars in numpy.
         np_out = not len(self.axes_manager._axes) == len(axes)
         ar_axes = tuple(ax.index_in_array for ax in axes)
-        if len(ar_axes) == 1:
+
+        if len(ar_axes) == 0:
+            # no axes is provided, so no operation needs to be done but we 
+            # still need to finished the execution of the function properly.
+            if out:
+                out.data[:] = self.data
+                out.events.data_changed.trigger(obj=out)
+                return
+            else:
+                return self
+        elif len(ar_axes) == 1:
             ar_axes = ar_axes[0]
 
         s = out or self._deepcopy_with_new_data(None)
@@ -3220,16 +3272,19 @@ class BaseSignal(FancySlicing,
                 im_fft = self._deepcopy_with_new_data(da.fft.fftshift(
                     da.fft.fftn(self.data, axes=axes, **kwargs), axes=axes))
             else:
-                im_fft = self._deepcopy_with_new_data(da.fft.fftn(self.data, axes=axes, **kwargs))
+                im_fft = self._deepcopy_with_new_data(
+                    da.fft.fftn(self.data, axes=axes, **kwargs))
         else:
             if shifted:
                 im_fft = self._deepcopy_with_new_data(np.fft.fftshift(
                     np.fft.fftn(self.data, axes=axes, **kwargs), axes=axes))
             else:
-                im_fft = self._deepcopy_with_new_data(np.fft.fftn(self.data, axes=axes, **kwargs))
+                im_fft = self._deepcopy_with_new_data(
+                    np.fft.fftn(self.data, axes=axes, **kwargs))
 
         im_fft.change_dtype("complex")
-        im_fft.metadata.General.title = 'FFT of {}'.format(im_fft.metadata.General.title)
+        im_fft.metadata.General.title = 'FFT of {}'.format(
+            im_fft.metadata.General.title)
         im_fft.metadata.set_item('Signal.FFT.shifted', shifted)
 
         ureg = UnitRegistry()
@@ -3294,7 +3349,8 @@ class BaseSignal(FancySlicing,
         if isinstance(self.data, da.Array):
             if shifted:
                 fft_data_shifted = da.fft.ifftshift(self.data, axes=axes)
-                im_ifft = self._deepcopy_with_new_data(da.fft.ifftn(fft_data_shifted, axes=axes, **kwargs))
+                im_ifft = self._deepcopy_with_new_data(
+                    da.fft.ifftn(fft_data_shifted, axes=axes, **kwargs))
             else:
                 im_ifft = self._deepcopy_with_new_data(da.fft.ifftn(
                     self.data, axes=axes, **kwargs))
@@ -3306,7 +3362,8 @@ class BaseSignal(FancySlicing,
                 im_ifft = self._deepcopy_with_new_data(np.fft.ifftn(
                     self.data, axes=axes, **kwargs))
 
-        im_ifft.metadata.General.title = 'iFFT of {}'.format(im_ifft.metadata.General.title)
+        im_ifft.metadata.General.title = 'iFFT of {}'.format(
+            im_ifft.metadata.General.title)
         im_ifft.metadata.Signal.__delattr__('FFT')
         im_ifft = im_ifft.real
 
@@ -4345,7 +4402,7 @@ class BaseSignal(FancySlicing,
         """
         self.metadata.Signal.signal_origin = origin
 
-    def print_summary_statistics(self, formatter="%.3f"):
+    def print_summary_statistics(self, formatter="%.3g"):
         """Prints the five-number summary statistics of the data, the mean and
         the standard deviation.
 
@@ -4400,7 +4457,7 @@ class BaseSignal(FancySlicing,
 
     def add_marker(
             self, marker, plot_on_signal=True, plot_marker=True,
-            permanent=False, plot_signal=True):
+            permanent=False, plot_signal=True, render_figure=True):
         """
         Add a marker to the signal or navigator plot.
 
@@ -4506,7 +4563,7 @@ class BaseSignal(FancySlicing,
                     if self._plot.navigator_plot is None:
                         self.plot()
                     self._plot.navigator_plot.add_marker(m)
-                m.plot(update_plot=False)
+                m.plot(render_figure=False)
             if permanent:
                 for marker_object in marker_object_list:
                     if m is marker_object:
@@ -4526,11 +4583,17 @@ class BaseSignal(FancySlicing,
                     "plot_marker=False and permanent=False does nothing")
         if permanent:
             self.metadata.Markers = markers_dict
-        if plot_marker:
-            if self._plot.signal_plot:
-                self._plot.signal_plot.ax.hspy_fig._update_animated()
-            if self._plot.navigator_plot:
-                self._plot.navigator_plot.ax.hspy_fig._update_animated()
+        if plot_marker and render_figure:
+            self._render_figure()
+
+    def _render_figure(self, plot=['signal_plot', 'navigation_plot']):
+        for p in plot:
+            if hasattr(self._plot, p):
+                p = getattr(self._plot, p)
+                if p.figure.canvas.supports_blit:
+                    p.ax.hspy_fig._update_animated()
+                else:
+                    p.ax.hspy_fig._draw_animated()
 
     def _plot_permanent_markers(self):
         marker_name_list = self.metadata.Markers.keys()
@@ -4542,11 +4605,8 @@ class BaseSignal(FancySlicing,
                     self._plot.signal_plot.add_marker(marker)
                 else:
                     self._plot.navigator_plot.add_marker(marker)
-                marker.plot(update_plot=False)
-        if self._plot.signal_plot:
-            self._plot.signal_plot.ax.hspy_fig._update_animated()
-        if self._plot.navigator_plot:
-            self._plot.navigator_plot.ax.hspy_fig._update_animated()
+                marker.plot(render_figure=False)
+        self._render_figure()
 
     def add_poissonian_noise(self, keep_dtype=True):
         """Add Poissonian noise to the data
