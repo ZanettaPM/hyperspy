@@ -61,6 +61,9 @@ class PowerLaw(Component):
         self.isbackground = True
         self.convolved = False
 
+        # Linearity
+        self.A._is_linear = True
+
     def function(self, x):
         return np.where(x > self.left_cutoff, self.A.value *
                         (x - self.origin.value) ** (-self.r.value), 0)
@@ -135,7 +138,7 @@ class PowerLaw(Component):
             else:
                 r = np.nan_to_num(r)
                 A = np.nan_to_num(A)
-        except:
+        except BaseException:
             return False
         if only_current is True:
             self.r.value = r

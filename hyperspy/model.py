@@ -28,6 +28,7 @@ import scipy
 import scipy.odr as odr
 from scipy.optimize import (leastsq, least_squares,
                             minimize, differential_evolution)
+from scipy.optimize import lsq_linear as linear
 from scipy.linalg import svd
 from contextlib import contextmanager
 
@@ -57,6 +58,8 @@ _logger = logging.getLogger(__name__)
 
 class DummyComponentsContainer:
     pass
+
+
 components = DummyComponentsContainer()
 components.__dict__.update(components1d.__dict__)
 components.__dict__.update(components2d.__dict__)
@@ -110,7 +113,7 @@ class BaseModel(list):
 
     A model is constructed as a linear combination of :mod:`components` that
     are added to the model using :meth:`append` or :meth:`extend`. There
-    are many predifined components available in the in the :mod:`components`
+    are many predefined components available in the in the :mod:`components`
     module. If needed, new components can be created easily using the code of
     existing components as a template.
 
@@ -135,7 +138,7 @@ class BaseModel(list):
         Reduced chi-squared.
     components : `ModelComponents` instance
         The components of the model are attributes of this class. This provides
-        a convinient way to access the model components when working in IPython
+        a convenient way to access the model components when working in IPython
         as it enables tab completion.
 
     Methods
@@ -204,7 +207,7 @@ class BaseModel(list):
 
         self.events = Events()
         self.events.fitted = Event("""
-            Event that triggers after fitting changed at least one paramter.
+            Event that triggers after fitting changed at least one parameter.
 
             The event triggers after the fitting step was finished, and only of
             at least one of the parameters changed.
@@ -405,16 +408,17 @@ class BaseModel(list):
     def as_signal(self, component_list=None, out_of_range_to_nan=True,
                   show_progressbar=None, out=None, parallel=None):
         """Returns a recreation of the dataset using the model.
-        the spectral range that is not fitted is filled with nans.
+        The spectral range that is not fitted is filled with nans.
 
         Parameters
         ----------
-        component_list : list of hyperspy components, optional
+        component_list : list of HyperSpy components, optional
             If a list of components is given, only the components given in the
             list is used in making the returned spectrum. The components can
             be specified by name, index or themselves.
         out_of_range_to_nan : bool
             If True the spectral range that is not fitted is filled with nans.
+            Default True.
         show_progressbar : None or bool
             If True, display a progress bar. If None the default is set in
             `preferences`.
@@ -423,7 +427,7 @@ class BaseModel(list):
             processing. If None (default), creates a new one. If passed, it is
             assumed to be of correct shape and dtype and not checked.
         parallel : bool, int
-            If True or more than 1, perform the recreation parallely using as
+            If True or more than 1, perform the recreation parallel using as
             many threads as specified. If True, as many threads as CPU cores
             available are used.
 
@@ -443,6 +447,8 @@ class BaseModel(list):
         >>> s2 = m.as_signal(component_list=[l1])
 
         """
+        if show_progressbar is None:
+            show_progressbar = preferences.General.show_progressbar
         if parallel is None:
             parallel = preferences.General.parallel
         if out is None:
@@ -500,7 +506,7 @@ class BaseModel(list):
                         data=thing[1],
                         component_list=component_list,
                         out_of_range_to_nan=out_of_range_to_nan,
-                        show_progressbar=thing[2] + 1),
+                        show_progressbar=thing[2] + 1 if show_progressbar else False),
                     zip(models, data_slices, range(int(parallel))))
             _ = next(_map)
         return signal
@@ -544,7 +550,7 @@ class BaseModel(list):
 
     @property
     def _plot_active(self):
-        if self._plot is not None and self._plot.is_active() is True:
+        if self._plot is not None and self._plot.is_active:
             return True
         else:
             return False
@@ -554,19 +560,20 @@ class BaseModel(list):
             return
         for i, component in enumerate(components):
             component.events.active_changed.connect(
-                self._model_line.update, [])
+                self._model_line._auto_update_line, [])
             for parameter in component.parameters:
                 parameter.events.value_changed.connect(
-                    self._model_line.update, [])
+                    self._model_line._auto_update_line, [])
 
     def _disconnect_parameters2update_plot(self, components):
         if self._model_line is None:
             return
         for component in components:
-            component.events.active_changed.disconnect(self._model_line.update)
+            component.events.active_changed.disconnect(
+                self._model_line._auto_update_line)
             for parameter in component.parameters:
                 parameter.events.value_changed.disconnect(
-                    self._model_line.update)
+                    self._model_line._auto_update_line)
 
     def update_plot(self, *args, **kwargs):
         """Update model plot.
@@ -580,11 +587,12 @@ class BaseModel(list):
         """
         if self._plot_active is True and self._suspend_update is False:
             try:
-                self._update_model_line()
+                if self._model_line is not None:
+                    self._model_line.update()
                 for component in [component for component in self if
                                   component.active is True]:
                     self._update_component_line(component)
-            except:
+            except BaseException:
                 self._disconnect_parameters2update_plot(components=self)
 
     @contextmanager
@@ -599,14 +607,14 @@ class BaseModel(list):
         es = EventSuppressor()
         es.add(self.axes_manager.events.indices_changed)
         if self._model_line:
-            f = self._model_line.update
+            f = self._model_line._auto_update_line
             for c in self:
                 es.add(c.events, f)
                 for p in c.parameters:
                     es.add(p.events, f)
         for c in self:
             if hasattr(c, '_model_plot_line'):
-                f = c._model_plot_line.update
+                f = c._model_plot_line._auto_update_line
                 es.add(c.events, f)
                 for p in c.parameters:
                     es.add(p.events, f)
@@ -620,26 +628,16 @@ class BaseModel(list):
         if update_on_resume is True:
             self.update_plot()
 
-    def _update_model_line(self):
-        if (self._plot_active is True and
-                self._model_line is not None):
-            self._model_line.update()
-
     def _close_plot(self):
         if self._plot_components is True:
             self.disable_plot_components()
         self._disconnect_parameters2update_plot(components=self)
         self._model_line = None
 
-    def _update_model_line(self):
-        if (self._plot_active is True and
-                self._model_line is not None):
-            self._model_line.update()
-
     @staticmethod
     def _connect_component_line(component):
         if hasattr(component, "_model_plot_line"):
-            f = component._model_plot_line.update
+            f = component._model_plot_line._auto_update_line
             component.events.active_changed.connect(f, [])
             for parameter in component.parameters:
                 parameter.events.value_changed.connect(f, [])
@@ -647,7 +645,7 @@ class BaseModel(list):
     @staticmethod
     def _disconnect_component_line(component):
         if hasattr(component, "_model_plot_line"):
-            f = component._model_plot_line.update
+            f = component._model_plot_line._auto_update_line
             component.events.active_changed.disconnect(f)
             for parameter in component.parameters:
                 parameter.events.value_changed.disconnect(f)
@@ -691,12 +689,14 @@ class BaseModel(list):
 
     def _set_p0(self):
         self.p0 = ()
+        self.free_parameters = ()
         for component in self:
             if component.active:
                 for parameter in component.free_parameters:
                     self.p0 = (self.p0 + (parameter.value,)
                                if parameter._number_of_elements == 1
                                else self.p0 + parameter.value)
+                    self.free_parameters = self.free_parameters + (parameter, )
 
     def set_boundaries(self):
         """Generate the boundary list.
@@ -780,7 +780,7 @@ class BaseModel(list):
 
         Parameters
         ----------
-        only_fixed : bool
+        only_fixed : bool, optional
             If True, only the fixed parameters are fetched.
 
         See Also
@@ -795,13 +795,12 @@ class BaseModel(list):
                 component.fetch_stored_values(only_fixed=only_fixed)
 
     def _fetch_values_from_p0(self, p_std=None):
-        """Fetch the parameter values from the output of the optimzer `self.p0`
+        """Fetch the parameter values from the output of the optimizer `self.p0`
 
         Parameters
         ----------
-        p_std : array
-            array containing the corresponding standard deviatio
-            n
+        p_std : array, optional
+            array containing the corresponding standard deviation.
 
         """
         comp_p_std = None
@@ -839,6 +838,221 @@ class BaseModel(list):
         self._fetch_values_from_p0()
         to_return = self.__call__(non_convolved=False, onlyactive=True)
         return to_return
+
+    def _check_all_active_components_are_linear(self):
+        """Loops through active components checking all parameters are linear"""
+        for comp in self:
+            if comp.active:
+                for parameter in comp.parameters:
+                    if parameter.free:
+                        if not parameter._is_linear:
+                            return False
+        return True
+
+    def _get_nonlinear_components(self):
+        """Returning list of all active nonlinear components"""
+        nonlinear = []
+        for comp in self:
+            if comp.active:
+                for parameter in comp.parameters:
+                    if parameter.free:
+                        if not parameter._is_linear:
+                            nonlinear.append(comp)  # component is not linear
+                            break
+        return nonlinear
+
+    def _check_and_set_linear_parameters_not_zero(self):
+        """Linear components will not scale correctly if they are currently
+        set to zero"""
+
+        warning = "Value of linear parameter {} of component {}" \
+            " was set to zero. Changed to value = 1 for fitting."
+        for comp in self:
+            if comp.active:
+                for parameter in comp.free_parameters:
+                    if parameter.value == 0:
+                        parameter._set_value(1)
+                        logging.warning(warning.format(
+                            parameter.name, comp.name))
+
+    def _linear_fitting(self, bounded):
+        nonlinear = self._get_nonlinear_components()
+        not_linear_error = "Not all components are linear. Fit with a " \
+                    "different fitter or set non-linear " \
+                    "`parameters.free = False`. These " \
+                    "components are nonlinear:"
+        if nonlinear:
+            raise AttributeError(not_linear_error + str(nonlinear))
+
+        self._check_and_set_linear_parameters_not_zero()
+        self._set_p0()
+        number_of_free_parameters = len(self.p0)
+        assert number_of_free_parameters > 0, \
+            'Model does not contain any free components!'
+        # TODO: Need a better way of calculating the shape than this... 
+        axes = [ax.axis for ax in self.axes_manager.signal_axes]
+        mesh = np.meshgrid(*axes)
+        mesh = [me[np.where(self.channel_switches)] for me in mesh]
+        channels_signal_shape = mesh[0].shape
+        #channels_signal_shape = tuple((np.prod(self.channel_switches.shape),))
+        
+        comp_data = np.zeros((number_of_free_parameters,) + channels_signal_shape)
+        comp_data_constant_values = np.zeros(
+            (number_of_free_parameters,) + channels_signal_shape)
+        fixed_comp_data = np.zeros(channels_signal_shape)
+
+        def p0_index_from_component(component):
+            return self.free_parameters.index(component.free_parameters[0])
+
+        def p0_index_from_parameter(parameter):
+            return self.free_parameters.index(parameter)
+
+        def _append_component(component):
+            '''The following code works for a model where ax+b/x+c can be
+            multiple components, not only one'''
+            if component.free_parameters:
+                # linear component to fit, with constant part
+                # Constant part of just linear components
+                index = p0_index_from_component(component)
+                if len(component.free_parameters) < 2:
+                    COMP = component._compute_component()
+                    CONST = component._compute_constant_term()
+                    comp_data[index] += COMP - CONST
+                        
+                else:
+                    # Check that this component is based on Expression
+                    assert component._str_expression, \
+                        "Component {} has more than one free parameter, " \
+                        "which is only supported for Expression type " \
+                        "components."
+                    free, fixed = component._separate_fixed_and_free_expression_elements()
+                    for free_parameter in component.free_parameters:
+                        index = p0_index_from_parameter(free_parameter)
+                        comp_data[index] += component._compute_expression_part(
+                            free[free_parameter.name])
+                    fixed_comp_data[:] += component._compute_expression_part(
+                        fixed)
+            else:
+                # No free parameters, so component is a fixed.
+                # Entire value of fixed components
+                print(fixed_comp_data.shape)
+                print(component._compute_component().shape)
+                fixed_comp_data[:] += component._compute_component()
+
+        def get_parent_twin(parameter):
+            if parameter.twin:
+                return get_parent_twin(parameter.twin)
+            else:
+                return parameter
+
+        def add_twins(parent_comp):
+            'Accounts for situation where twins have been chained'
+            indices = [i for i, x in enumerate(
+                twinned_components_parents) if x == parent_comp]
+            if parent_comp.free_parameters:  # Parent component not fixed
+                for twin in np.array(twinned_components)[indices]:
+                    parent_parameter = get_parent_twin(
+                        twinned_parameters[twinned_components.index(twin)])
+                    index = p0_index_from_parameter(parent_parameter)
+                    if len(component.free_parameters) < 2:
+                        comp_data[index] += twin._compute_component()
+            else:  # Parent component is fixed, so all children are fixed too
+                for twin in np.array(twinned_components)[indices]:
+                    fixed_comp_data[:] += twin._compute_component()
+
+        def append_component(component):
+            'Separate free and constant data for fitting'
+            if component not in twinned_components:
+                _append_component(component)
+                if component in twinned_components_parents:
+                    add_twins(component)
+
+        def top_parent_twin(parameter):
+            if parameter.twin.twin:
+                return top_parent_twin(parameter.twin)
+            else:
+                return parameter.twin
+
+        def calculate_covariance_matrix(A, b):
+            '''Calculate covariance matrix after performing Linear Regression
+
+            Parameters:
+            fit: The resultant fit after performing fitting, same shape as b
+            A: The component matrix fitted against
+            b: The raw data fitted to
+
+            '''
+            n = b.shape[0]
+            k = A.shape[-1]
+            residual = b - (self._fit_coefficients * A).sum(-1)
+
+            residual_dot = np.dot(residual.T, residual)
+            component_dot = np.dot(A.T, A)
+            inverse_component_dot = np.linalg.inv(component_dot)
+
+            covariance = (1 / (n - k)) * np.dot(residual_dot,
+                                                inverse_component_dot)
+            return covariance
+
+        def standard_error_from_covariance(covariance):
+            standard_error = np.sqrt(np.diagonal(covariance))
+            return standard_error
+
+        # Create a list of twinned components and their parents
+        twinned_components_parents = []
+        twinned_parameters_parents = []
+        twinned_components = []
+        twinned_parameters = []
+        for comp in self:
+            for para in comp.parameters:
+                if para.twin and para._is_linear:
+                    twinned_components.append(comp)
+                    twinned_parameters.append(para)
+                    parent = top_parent_twin(para)
+                    twinned_parameters_parents.append(parent)
+                    twinned_components_parents.append(parent.component)
+        self.twinned_components_parents = twinned_components_parents
+        self.twinned_components = twinned_components
+
+        for component in self:
+            if component.active and component not in twinned_components:
+                append_component(component)
+
+        comp_data = comp_data - comp_data_constant_values  # the linear data
+        self.comp_data_constant_values = comp_data_constant_values
+        y = self.signal()[np.where(self.channel_switches)]
+
+        if self.signal.metadata.Signal.binned is True:
+            y = y / self.signal.axes_manager[-1].scale
+
+        y = y - fixed_comp_data  # - model_constant_term
+
+        comp_data_shape = comp_data.shape
+        y = y.flatten()
+        comp_data = comp_data.reshape((comp_data_shape[0],) +  y.shape)
+
+        if bounded:
+            self.set_boundaries()
+            bounds = self.free_parameters_boundaries
+            # Must scale bounds by current value as bounds refer to
+            # scaling factor
+            new_bounds = ([bmin / value if bmin is not None else -np.inf
+                           for (bmin, bmax), value in zip(bounds, self.p0)],
+                          [bmax / value if bmax is not None else np.inf
+                           for (bmin, bmax), value in zip(bounds, self.p0)])
+
+            output = linear(comp_data.T, y, bounds=new_bounds)
+        else:
+            output = linear(comp_data.T, y)
+            
+        self.comp_data = comp_data.reshape(comp_data_shape)
+        self.fit_output = output
+        self._fit_coefficients = output["x"]
+        self.p0 = tuple(
+            [oldp0 * fit_coefficient for oldp0,
+             fit_coefficient in zip(self.p0, self._fit_coefficients)])
+        covariance = calculate_covariance_matrix(comp_data.T, y)
+        self.p_std = self.p0 * standard_error_from_covariance(covariance)
 
     def _errfunc2(self, param, y, weights=None):
         if weights is None:
@@ -900,11 +1114,16 @@ class BaseModel(list):
         fitter : {"leastsq", "mpfit", "odr", "Nelder-Mead",
                  "Powell", "CG", "BFGS", "Newton-CG", "L-BFGS-B", "TNC",
                  "Differential Evolution"}
-            The optimization algorithm used to perform the fitting. Deafault
-            is "leastsq".
-
+            The optimization algorithm used to perform the fitting. The default
+            is "leastsq" when there are free non-linear parameters and "linear"
+            when the free parameters are all linear.
+                
                 "leastsq" performs least-squares optimization, and supports
                 bounds on parameters.
+
+                "linear" performs least-squares fitting using linear
+                regression. Very fast and supports bounds, but does not
+                allow fitting of non-linear parameters.
 
                 "mpfit" performs least-squares using the Levenberg–Marquardt
                 algorithm and supports bounds on parameters.
@@ -956,8 +1175,11 @@ class BaseModel(list):
 
         """
 
-        if fitter is None:  # None meant "from preferences" before v1.3
-            fitter = "leastsq"
+        if fitter is None:
+            if self._check_all_active_components_are_linear():
+                fitter = "linear"
+            else:
+                fitter = 'leastsq'
         switch_aap = (update_plot != self._plot_active)
         if switch_aap is True and update_plot is False:
             cm = self.suspend_update
@@ -983,11 +1205,11 @@ class BaseModel(list):
 
         if bounded is True:
             if fitter not in ("leastsq", "mpfit", "TNC",
-                              "L-BFGS-B", "Differential Evolution"):
+                              "L-BFGS-B", "Differential Evolution", "linear"):
                 raise ValueError("Bounded optimization is only "
                                  "supported by 'leastsq', "
-                                 "'mpfit', 'TNC', 'L-BFGS-B' or"
-                                 "'Differential Evolution'.")
+                                 "'mpfit', 'TNC', 'L-BFGS-B', "
+                                 "'Differential Evolution' or 'linear'.")
             else:
                 # this has to be done before setting the p0,
                 # so moved things around
@@ -1014,11 +1236,12 @@ class BaseModel(list):
 
             if method == 'ml':
                 weights = None
-                if fitter in ("leastsq", "odr", "mpfit"):
+                if fitter in ("leastsq", "odr", "mpfit", "linear"):
                     raise NotImplementedError(
                         "Maximum likelihood estimation is not supported "
-                        'for the "leastsq", "mpfit" or "odr" optimizers')
+                        'for the "leastsq", "mpfit", "odr", or "linear" optimizers')
             elif method == "ls":
+
                 metadata = self.signal.metadata
                 if "Signal.Noise_properties.variance" not in metadata:
                     variance = 1
@@ -1131,6 +1354,9 @@ class BaseModel(list):
                         (self._errfunc(self.p0, *args) ** 2).sum() /
                         (len(args[0]) - len(self.p0)))
                 self.fit_output = m
+
+            elif fitter == "linear":
+                self._linear_fitting(bounded)
             else:
                 # General optimizers
                 # Least squares or maximum likelihood
@@ -1215,19 +1441,19 @@ class BaseModel(list):
         Parameters
         ----------
 
-        mask : {None, numpy.array}
+        mask : NumPy array, optional
             To mask (do not fit) at certain position pass a numpy.array
             of type bool where True indicates that the data will not be
             fitted at the given position.
         fetch_only_fixed : bool
             If True, only the fixed parameters values will be updated
-            when changing the positon.
+            when changing the positon. Default False.
         autosave : bool
             If True, the result of the fit will be saved automatically
-            with a frequency defined by autosave_every.
+            with a frequency defined by autosave_every. Default False.
         autosave_every : int
             Save the result of fitting every given number of spectra.
-
+            Default 10.
         show_progressbar : None or bool
             If True, display a progress bar. If None the default is set in
             `preferences`.
@@ -1590,11 +1816,11 @@ class BaseModel(list):
         Parameters
         ----------
         parameter_name : string
-            Name of the parameter whos value will be changed
+            Name of the parameter whose value will be changed
         value : number
             The new value of the parameter
         component_list : list of hyperspy components, optional
-            A list of components whos parameters will changed. The components
+            A list of components whose parameters will changed. The components
             can be specified by name, index or themselves.
 
         only_current : bool, default False
@@ -1695,7 +1921,7 @@ class BaseModel(list):
         value : bool
             The new value of the 'active' parameter
         component_list : list of hyperspy components, optional
-            A list of components whos parameters will changed. The components
+            A list of components whose parameters will changed. The components
             can be specified by name, index or themselves.
 
         only_current : bool, default False

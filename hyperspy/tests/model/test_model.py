@@ -585,6 +585,9 @@ class TestModel2D:
         np.testing.assert_allclose(gt.sigma_x.value, 1.)
         np.testing.assert_allclose(gt.sigma_y.value, 2.)
 
+    def test_function_call(self):
+        g = self.g
+        assert assert_array_almost_equal(g(), self.gt)
 
 @lazifyTestClass
 class TestModelFitBinned:
@@ -709,6 +712,20 @@ class TestModelFitBinned:
         np.testing.assert_allclose(self.m[0].A.value, 9991.65422046, 4)
         np.testing.assert_allclose(self.m[0].centre.value, 0.5)
         np.testing.assert_allclose(self.m[0].sigma.value, 2.08398236966)
+
+    def test_model_is_not_linear(self):
+        """
+        Model is not currently linear as Gaussian sigma and centre parameters are free
+        """
+        assert not self.m._check_all_active_components_are_linear()
+
+    def test_fit_lsq_linear(self):
+        self.m[0].sigma.free = False
+        self.m[0].centre.free = False
+        self.m.fit(fitter="linear")
+        np.testing.assert_allclose(self.m[0].A.value, 6132.640632924692, 1)
+        np.testing.assert_allclose(self.m[0].centre.value, 0.5)
+        np.testing.assert_allclose(self.m[0].sigma.value, 1)
 
     def test_wrong_method(self):
         with pytest.raises(ValueError):
@@ -861,12 +878,14 @@ class TestModelScalarVariance:
 class TestModelSignalVariance:
 
     def setup_method(self, method):
-        variance = hs.signals.Signal1D(np.arange(100, 300).reshape(
-            (2, 100)))
+        variance = hs.signals.Signal1D(
+            np.arange(100, 300, dtype="float64").reshape((2, 100)))
         s = variance.deepcopy()
         np.random.seed(1)
         std = 10
+        np.random.seed(1)
         s.add_gaussian_noise(std)
+        np.random.seed(1)
         s.add_poissonian_noise()
         s.metadata.set_item("Signal.Noise_properties.variance",
                             variance + std ** 2)
@@ -877,10 +896,10 @@ class TestModelSignalVariance:
 
     def test_std1_red_chisq(self):
         self.m.multifit(fitter="leastsq", method="ls", show_progressbar=None)
-        np.testing.assert_allclose(self.m.red_chisq.data[0],
-                                   0.79693355673230915)
-        np.testing.assert_allclose(self.m.red_chisq.data[1],
-                                   0.91453032901427167)
+        np.testing.assert_allclose(self.m.red_chisq.data[0], 0.813109,
+                                   atol=1e-5)
+        np.testing.assert_allclose(self.m.red_chisq.data[1], 0.697727,
+                                   atol=1e-5)
 
 
 @lazifyTestClass
@@ -950,6 +969,19 @@ class TestMultifit:
         m.multifit(fitter='leastsq', bounded=True, show_progressbar=None)
         np.testing.assert_array_almost_equal(self.m[0].r.map['values'],
                                              [3., 3.])
+        np.testing.assert_array_almost_equal(self.m[0].A.map['values'],
+                                             [4., 4.])
+
+    def test_bounded_snapping_lsq_linear(self):
+        m = self.m
+        m[0].A.free = True
+        m[0].r.free = False
+
+        m.signal.data *= 2.
+        m[0].A.value = 2.
+        m[0].r.value = 3.
+        m[0].r.assign_current_value_to_all()
+        m.multifit(fitter='linear', bounded=True, show_progressbar=None)
         np.testing.assert_array_almost_equal(self.m[0].A.map['values'],
                                              [4., 4.])
 
@@ -1030,19 +1062,22 @@ class TestAsSignal:
                                   show_progressbar=False, parallel=False)
             np.testing.assert_allclose(s1.data, s.data)
 
-    @pytest.mark.parametrize('parallel', [pytest.mark.parallel(True), False])
+    @pytest.mark.parametrize('parallel',
+                             [pytest.param(True, marks=pytest.mark.parallel), False])
     def test_all_components_simple(self, parallel):
         s = self.m.as_signal(show_progressbar=False, parallel=parallel)
         assert np.all(s.data == 4.)
 
-    @pytest.mark.parametrize('parallel', [pytest.mark.parallel(True), False])
+    @pytest.mark.parametrize('parallel',
+                             [pytest.param(True, marks=pytest.mark.parallel), False])
     def test_one_component_simple(self, parallel):
         s = self.m.as_signal(component_list=[0], show_progressbar=False,
                              parallel=parallel)
         assert np.all(s.data == 2.)
         assert self.m[1].active
 
-    @pytest.mark.parametrize('parallel', [pytest.mark.parallel(True), False])
+    @pytest.mark.parametrize('parallel',
+                             [pytest.param(True, marks=pytest.mark.parallel), False])
     def test_all_components_multidim(self, parallel):
         self.m[0].active_is_multidimensional = True
 
@@ -1055,7 +1090,8 @@ class TestAsSignal:
             s.data, np.array([np.ones((2, 5)) * 2, np.ones((2, 5)) * 4]))
         assert self.m[0].active_is_multidimensional
 
-    @pytest.mark.parametrize('parallel', [pytest.mark.parallel(True), False])
+    @pytest.mark.parametrize('parallel',
+                             [pytest.param(True, marks=pytest.mark.parallel), False])
     def test_one_component_multidim(self, parallel):
         self.m[0].active_is_multidimensional = True
 
@@ -1137,3 +1173,15 @@ class TestAdjustPosition:
         assert len(list(self.m._position_widgets.values())[0]) == 2
         self.m.disable_adjust_position()
         assert len(self.m._position_widgets) == 0
+
+
+class TestLinearFitting:
+    def setup_method(self, method):
+        self.s = hs.datasets.example_signals.EDS_SEM_Spectrum().isig[5.0:15.0]
+
+    def test_linear_fitting_with_offset(self):
+        m = self.s.create_model(auto_background=False)
+        c = hs.model.components1D.Expression('a*x+b', 'Linear')
+        m.append(c)
+        m.fit('linear')
+        np.testing.assert_allclose(m.p0, np.array([941.6686498804164, 47773.64289591281, -5902.642841343069, 57056.112565450574]))

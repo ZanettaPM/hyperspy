@@ -1,5 +1,8 @@
 from functools import wraps
 from hyperspy.component import Component
+import sympy
+import numpy as np
+from sympy.utilities.lambdify import lambdify
 
 _CLASS_DOC = \
     """%s component (created with Expression).
@@ -124,13 +127,18 @@ class Expression(Component):
             self.compile_function(module=module, position=rotation_center)
         # Initialise component
         Component.__init__(self, self._parameter_strings)
-        self._whitelist['expression'] = ('init', expression)
-        self._whitelist['name'] = ('init', name)
-        self._whitelist['position'] = ('init', position)
+        # When creating components using Expression (for example GaussianHF)
+        # we shouldn't add anything else to the _whitelist as the
+        # component should be initizialized with its own kwargs.
+        # An exception is "module"
         self._whitelist['module'] = ('init', module)
-        if self._is2D:
-            self._whitelist['add_rotation'] = ('init', self._add_rotation)
-            self._whitelist['rotation_center'] = ('init', rotation_center)
+        if self.__class__ is Expression:
+            self._whitelist['expression'] = ('init', expression)
+            self._whitelist['name'] = ('init', name)
+            self._whitelist['position'] = ('init', position)
+            if self._is2D:
+                self._whitelist['add_rotation'] = ('init', self._add_rotation)
+                self._whitelist['rotation_center'] = ('init', rotation_center)
         self.name = name
         # Set the position parameter
         if position:
@@ -148,9 +156,10 @@ class Expression(Component):
             self.__doc__ = _CLASS_DOC % (
                 name, sympy.latex(_parse_substitutions(expression)))
 
+        for para in self.parameters:
+            para._is_linear = check_parameter_linearity(expression, para.name)
+
     def compile_function(self, module="numpy", position=False):
-        import sympy
-        from sympy.utilities.lambdify import lambdify
         expr = _parse_substitutions(self._str_expression)
         # Extract x
         x, = [symbol for symbol in expr.free_symbols if symbol.name == "x"]
@@ -189,9 +198,10 @@ class Expression(Component):
                            modules=module, dummify=False)
 
         if self._is2D:
-            f = lambda x, y: self._f(x, y, *[p.value for p in self.parameters])
+            def f(x, y): return self._f(
+                x, y, *[p.value for p in self.parameters])
         else:
-            f = lambda x: self._f(x, *[p.value for p in self.parameters])
+            def f(x): return self._f(x, *[p.value for p in self.parameters])
         setattr(self, "function", f)
         parnames = [symbol.name for symbol in parameters]
         self._parameter_strings = parnames
@@ -216,3 +226,83 @@ class Expression(Component):
                         self,
                         Expression)
                     )
+
+    @property
+    def constant_term(self):
+        "Get value of constant term of free component"
+        # First get currently constant parameters
+        linear_parameters = []
+        for para in self.free_parameters:
+            if para._is_linear:
+                linear_parameters.append(para.name)
+        constant_expr, not_constant_expr = extract_constant_part_of_expression(
+            self._str_expression, *linear_parameters)
+
+        # Then replace symbols with value of each parameter
+        free_symbols = [str(free) for free in constant_expr.free_symbols]
+        for para in self.parameters:
+            if para.name in free_symbols:
+                constant_expr = constant_expr.subs(para.name, para.value)
+        return float(constant_expr)
+
+    def _separate_fixed_and_free_expression_elements(self):
+        expr = self._str_expression
+        ex = sympy.sympify(expr)
+        remaining_elements = ex.copy()
+        pseudo_components = {}
+        variables = ("x", "y") if self._is2D else ("x", )
+        for para in self.free_parameters:
+            element = ex.as_independent(para.name)[-1]
+            remaining_elements -= element
+            pseudo_components[para.name] = lambdify(variables, 
+                element.subs(para.name, para.value), modules='numpy')
+        fixed_parameters = list(set(self.parameters) - set(self.free_parameters))
+        fixed_parameter_values = [(para.name, para.value) for para in fixed_parameters]
+        fixed_part = lambdify(variables, remaining_elements.subs(fixed_parameter_values), modules='numpy')
+        return pseudo_components, fixed_part
+
+    def _compute_expression_part(self, function):
+        model = self.model
+        # TODO: Need a better way of calculating the shape than this... 
+        signal_shape = model.axes_manager.signal_shape[::-1]
+        #signal_shape = model.channel_switches.shape
+        if model.convolved and self.convolved:
+            data = self._convolve(function(model.convolution_axis), model=model)
+        else:
+            axes = [ax.axis for ax in model.axes_manager.signal_axes]
+            mesh = np.meshgrid(*axes)
+            data = function(*mesh)*np.ones(signal_shape)
+        return data[np.where(model.channel_switches)]
+
+def check_parameter_linearity(expr, name):
+    "Check whether expression is linear for a given parameter"
+    try:
+        if not sympy.Eq(sympy.diff(expr, name, 2), 0):
+            return False
+    except TypeError:
+        return False
+    return True
+
+
+def check_if_parameter_is_offset(expr, name):
+    '''Separate offset from an expression, for instance
+    b from ax+b in an expression
+    expr : str - component expression
+    name : str - attribute in expression to determine
+    '''
+    first_derivative_for_x = sympy.Eq(sympy.diff(expr, name, 1), 0)
+    return first_derivative_for_x == False
+
+
+def extract_constant_part_of_expression(expr, *args):
+    """
+    Check linearity by multiplying a parameter by a factor and testing if the
+    new expression is equal to multiplying the whole expression by the same factor.
+    Testing parameter `a` in example expression `f(x) = a*x + b` by multiplying
+    by factor `factor`:
+
+    `a` is linear if ``(a*LIN)*x + b == LIN*f(x)``
+    """
+    expr = sympy.sympify(expr)
+    constant, not_constant = expr.as_independent(*args, as_Add=True)
+    return constant, not_constant
