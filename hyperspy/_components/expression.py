@@ -1,8 +1,5 @@
 from functools import wraps
 from hyperspy.component import Component
-import sympy
-import numpy as np
-from sympy.utilities.lambdify import lambdify
 
 _CLASS_DOC = \
     """%s component (created with Expression).
@@ -121,25 +118,19 @@ class Expression(Component):
         import sympy
         self._add_rotation = add_rotation
         self._str_expression = expression
-        self._module = module
         if rotation_center is None:
             self.compile_function(module=module, position=position)
         else:
             self.compile_function(module=module, position=rotation_center)
         # Initialise component
         Component.__init__(self, self._parameter_strings)
-        # When creating components using Expression (for example GaussianHF)
-        # we shouldn't add anything else to the _whitelist as the
-        # component should be initizialized with its own kwargs.
-        # An exception is "module"
+        self._whitelist['expression'] = ('init', expression)
+        self._whitelist['name'] = ('init', name)
+        self._whitelist['position'] = ('init', position)
         self._whitelist['module'] = ('init', module)
-        if self.__class__ is Expression:
-            self._whitelist['expression'] = ('init', expression)
-            self._whitelist['name'] = ('init', name)
-            self._whitelist['position'] = ('init', position)
-            if self._is2D:
-                self._whitelist['add_rotation'] = ('init', self._add_rotation)
-                self._whitelist['rotation_center'] = ('init', rotation_center)
+        if self._is2D:
+            self._whitelist['add_rotation'] = ('init', self._add_rotation)
+            self._whitelist['rotation_center'] = ('init', rotation_center)
         self.name = name
         # Set the position parameter
         if position:
@@ -157,12 +148,10 @@ class Expression(Component):
             self.__doc__ = _CLASS_DOC % (
                 name, sympy.latex(_parse_substitutions(expression)))
 
-        for para in self.parameters:
-            para._is_linear = check_parameter_linearity(self._parsed_expr, para.name)
-
     def compile_function(self, module="numpy", position=False):
+        import sympy
+        from sympy.utilities.lambdify import lambdify
         expr = _parse_substitutions(self._str_expression)
-        self._parsed_expr = expr
         # Extract x
         x, = [symbol for symbol in expr.free_symbols if symbol.name == "x"]
         # Extract y
@@ -195,28 +184,14 @@ class Expression(Component):
             if symbol.name not in variables]
         parameters.sort(key=lambda x: x.name)  # to have a reliable order
         # Create compiled function
-
-        def get_parameters(multi=False):
-            if multi:
-                sig_dim = self.model.axes_manager.signal_dimension
-                return [
-                    para.map['values'].reshape(
-                        para.map['values'].shape + sig_dim*(1,))
-                    for para in self.parameters]
-            else:
-                return [para.value for para in self.parameters]
         variables = [x, y] if self._is2D else [x]
         self._f = lambdify(variables + parameters, eval_expr,
                            modules=module, dummify=False)
-        if self._is2D:
-            def f(x, y, multi=False):
-                para = get_parameters(multi)
-                return self._f(x, y, *para)
-        else:
-            def f(x, multi=False):
-                para = get_parameters(multi)
-                return self._f(x, *para)
 
+        if self._is2D:
+            f = lambda x, y: self._f(x, y, *[p.value for p in self.parameters])
+        else:
+            f = lambda x: self._f(x, *[p.value for p in self.parameters])
         setattr(self, "function", f)
         parnames = [symbol.name for symbol in parameters]
         self._parameter_strings = parnames
@@ -241,140 +216,3 @@ class Expression(Component):
                         self,
                         Expression)
                     )
-
-    def get_constant_term(self, multi=False):
-        "Get value of constant term of free component"
-        # First get currently constant parameters
-        linear_parameters = []
-        for para in self.free_parameters:
-            if para._is_linear:
-                linear_parameters.append(para.name)
-        constant_expr, not_constant_expr = extract_constant_part_of_expression(
-            self._str_expression, *linear_parameters)
-
-        # Then replace symbols with value of each parameter
-        free_symbols = [str(free) for free in constant_expr.free_symbols]
-        variables = ["x", "y"] if self._is2D else ["x"]
-        is_variable = []
-        for var in variables:
-            if var in free_symbols:
-                free_symbols.remove(var)
-                is_variable.append(var)
-        signal_dim = len(is_variable)
-        para_values = []
-        for parameter_name in free_symbols:
-            para = getattr(self, parameter_name)
-            if multi:
-                para_values.append(np.reshape(
-                    para.map['values'], para.map['values'].shape + signal_dim*(1,)))
-            else:
-                para_values.append(para.value)
-        func = lambdify(is_variable + free_symbols, constant_expr,
-                        modules="numpy")
-        axes = []
-        for ax, axis in zip(["x", "y"], self.model.axes_manager.signal_axes):
-            if ax in is_variable:
-                axes.append(axis.axis)
-        mesh = np.meshgrid(*axes)
-        constant = func(*mesh, *para_values)
-        return constant
-
-    def _separate_pseudocomponents(self):
-        '''Separate an expression into a group of lambdified functions
-        that can compute the free parts of the expression, and a single
-        lambdified function that computes the fixed parts of the expression'''
-
-        expr = self._str_expression
-        ex = sympy.sympify(expr)
-        remaining_elements = ex.copy()
-        free_pseudo_components = {}
-        variables = ("x", "y") if self._is2D else ("x", )
-        for para in self.free_parameters:
-            element = ex.as_independent(para.name)[-1]
-            remaining_elements -= element
-            element_names = set([str(p)
-                                 for p in element.free_symbols]) - set(variables)
-
-            free_pseudo_components[para.name] = {
-                'function': lambdify(variables + tuple(element_names), element, modules=self._module),
-                'parameters': [getattr(self, e) for e in element_names]
-            }
-
-        element_names = set(
-            [str(p) for p in remaining_elements.free_symbols]) - set(variables)
-        fixed_pseudo_components = {
-            'function': lambdify(variables + tuple(element_names), remaining_elements, modules=self._module),
-            'parameters': [getattr(self, e) for e in element_names]
-        }
-
-        return free_pseudo_components, fixed_pseudo_components,
-
-    def _compute_expression_part(self, part, multi=False):
-        'Compute the expression for a given value or map["values"]'
-        model = self.model
-        function = part['function']
-        parameters = part['parameters']
-        arr_nav_shape = model.axes_manager._navigation_shape_in_array
-        if multi:
-            parameters = [para.map['values'] for para in parameters]
-            nav_shape = arr_nav_shape
-        else:
-            parameters = [para.value for para in parameters]
-            nav_shape = ()
-        signal_shape = model.axes_manager._signal_shape_in_array
-        if model.convolved and self.convolved:
-            shape = model.convolution_axis
-            convolution_axis = model.convolution_axis.reshape(
-                shape + len(nav_shape)*(1,))
-            data = self._convolve(
-                function(convolution_axis, *parameters), model=model)
-        else:
-            axes = [ax.axis for ax in model.axes_manager.signal_axes]
-            mesh = np.meshgrid(*axes)
-            shape = mesh[0].shape
-            mesh = [m.reshape(shape + len(nav_shape)*(1,)) for m in mesh]
-            data = function(*mesh, *parameters)
-            if np.shape(data) == ():
-                data = data * \
-                    np.ones(signal_shape)[np.where(model.channel_switches)]
-            elif np.shape(data) == arr_nav_shape:
-                data = data[..., None] * \
-                    np.ones(signal_shape)[np.where(model.channel_switches)]
-            else:
-                data = data[np.where(model.channel_switches)]
-                data = np.moveaxis(data, 0, -1)
-        return data
-
-
-def check_parameter_linearity(expr, name):
-    "Check whether expression is linear for a given parameter"
-    try:
-        if not sympy.Eq(sympy.diff(expr, name, 2), 0):
-            return False
-    except TypeError:
-        return False
-    return True
-
-
-def check_if_parameter_is_offset(expr, name):
-    '''Separate offset from an expression, for instance
-    b from ax+b in an expression
-    expr : str - component expression
-    name : str - attribute in expression to determine
-    '''
-    first_derivative_for_x = sympy.Eq(sympy.diff(expr, name, 1), 0)
-    return first_derivative_for_x == False
-
-
-def extract_constant_part_of_expression(expr, *args):
-    """
-    Check linearity by multiplying a parameter by a factor and testing if the
-    new expression is equal to multiplying the whole expression by the same factor.
-    Testing parameter `a` in example expression `f(x) = a*x + b` by multiplying
-    by factor `factor`:
-
-    `a` is linear if ``(a*LIN)*x + b == LIN*f(x)``
-    """
-    expr = sympy.sympify(expr)
-    constant, not_constant = expr.as_independent(*args, as_Add=True)
-    return constant, not_constant

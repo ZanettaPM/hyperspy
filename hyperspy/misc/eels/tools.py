@@ -208,16 +208,14 @@ def ratio(edge_A, edge_B):
 
 
 def eels_constant(s, zlp, t):
-    r"""Calculate the constant of proportionality (k) in the relationship
+    """Calculate the constant of proportionality (k) in the relationship
     between the EELS signal and the dielectric function.
     dielectric function from a single scattering distribution (SSD) using
     the Kramers-Kronig relations.
 
-        .. math::
-
-            S(E)=\frac{I_{0}t}{\pi a_{0}m_{0}v^{2}}\ln\left[1+\left(\frac{\beta}
-            {\theta_{E}}\right)^{2}\right]\Im(\frac{-1}{\epsilon(E)})=
-            k\Im(\frac{-1}{\epsilon(E)})
+    $S(E)=\frac{I_{0}t}{\pi a_{0}m_{0}v^{2}}\ln\left[1+\left(\frac{\beta}
+    {\theta_{E}}\right)^{2}\right]\Im(\frac{-1}{\epsilon(E)})=
+    k\Im(\frac{-1}{\epsilon(E)})$
 
 
     Parameters
@@ -249,14 +247,14 @@ def eels_constant(s, zlp, t):
     # Mapped parameters
     try:
         e0 = s.metadata.Acquisition_instrument.TEM.beam_energy
-    except BaseException:
+    except:
         raise AttributeError("Please define the beam energy."
                              "You can do this e.g. by using the "
                              "set_microscope_parameters method")
     try:
         beta = s.metadata.Acquisition_instrument.\
             TEM.Detector.EELS.collection_angle
-    except BaseException:
+    except:
         raise AttributeError("Please define the collection semi-angle."
                              "You can do this e.g. by using the "
                              "set_microscope_parameters method")
@@ -273,20 +271,18 @@ def eels_constant(s, zlp, t):
             if zlp.axes_manager.signal_dimension == 0:
                 i0 = zlp.data
             else:
-                i0 = zlp.integrate1D(axis.index_in_axes_manager).data
+                i0 = zlp.data.sum(axis.index_in_array)
         else:
             raise ValueError('The ZLP signal dimensions are not '
                              'compatible with the dimensions of the '
                              'low-loss signal')
-        # The following prevents errors if the signal is a single spectrum
-        if len(i0) != 1:
-            i0 = i0.reshape(
-                np.insert(i0.shape, axis.index_in_array, 1))
+        i0 = i0.reshape(
+            np.insert(i0.shape, axis.index_in_array, 1))
     elif isinstance(zlp, numbers.Number):
         i0 = zlp
     else:
-        raise ValueError('The zero-loss peak input is not valid, it must be\
-                         in the BaseSignal class or a Number.')
+        raise ValueError('The zero-loss peak input must be a Hyperspy signal\
+                         or a number.')
 
     if isinstance(t, hyperspy.signal.BaseSignal):
         if (t.axes_manager.navigation_dimension ==

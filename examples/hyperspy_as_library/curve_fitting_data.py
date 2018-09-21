@@ -1,6 +1,4 @@
-""" Loads hyperspy as a regular python library, loads spectra from files,
-does curve fitting, and plotting the model and original spectrum to a png
-file"""
+""" Loads hyperspy as a regular python library, loads spectrums from files, does curve fitting, and plotting the model and original spectrum to a png file"""
 
 import hyperspy.api as hs
 import matplotlib.pyplot as plt
@@ -19,7 +17,7 @@ ll = hs.load(lowlossSpectrumFileName).to_EELS()
 
 m = s.create_model(ll=ll)
 m.enable_fine_structure()
-m.multifit(fitter='leastsq', kind="smart")
+m.multifit(kind="smart")
 m.plot()
 
 plt.savefig("model_original_spectrum_plot.png")

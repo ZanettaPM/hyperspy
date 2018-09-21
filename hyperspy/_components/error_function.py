@@ -37,13 +37,9 @@ class Erf(Component):
     origin : float
     """
 
-    def __init__(self, A=1, sigma=1, origin=0):
+    def __init__(self):
         Component.__init__(self, ['A', 'sigma', 'origin'])
 
-        self.A.value = A
-        self.sigma.value = sigma
-        self.origin.value = origin
-        
         # Boundaries
         self.A.bmin = 0.
         self.A.bmax = None
@@ -60,18 +56,10 @@ class Erf(Component):
         self.origin.grad = self.grad_origin
         self._position = self.origin
 
-        # Linearity
-        self.A._is_linear = True
-
-    def function(self, x, multi=False):
-        if multi:
-            A = self.A.map['values'][...,None]
-            sigma = self.sigma.map['values'][...,None]
-            origin = self.origin.map['values'][...,None]
-        else:
-            A = self.A.value
-            sigma = self.sigma.value
-            origin = self.origin.value
+    def function(self, x):
+        A = self.A.value
+        sigma = self.sigma.value
+        origin = self.origin.value
         return A * erf((x - origin) / math.sqrt(2) / sigma) / 2
 
     def grad_A(self, x):

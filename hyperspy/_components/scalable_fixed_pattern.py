@@ -64,8 +64,7 @@ class ScalableFixedPattern(Component):
 
     """
 
-    def __init__(self, signal1D, yscale=1.0, xscale=1.0,
-                 shift=0.0, interpolate=True):
+    def __init__(self, signal1D):
 
         Component.__init__(self, ['yscale', 'xscale', 'shift'])
 
@@ -73,18 +72,15 @@ class ScalableFixedPattern(Component):
         self._whitelist['signal1D'] = ('init,sig', signal1D)
         self.signal = signal1D
         self.yscale.free = True
-        self.yscale.value = yscale
-        self.xscale.value = xscale
-        self.shift.value = shift
+        self.yscale.value = 1.
+        self.xscale.value = 1.
+        self.shift.value = 0.
 
         self.prepare_interpolator()
         # Options
         self.isbackground = True
         self.convolved = False
-        self.interpolate = interpolate
-
-        # Linearity
-        self.yscale._is_linear = True
+        self.interpolate = True
 
     def prepare_interpolator(self, kind='linear', fill_value=0, **kwargs):
         """Prepare interpolation.
@@ -118,21 +114,12 @@ class ScalableFixedPattern(Component):
             fill_value=fill_value,
             **kwargs)
 
-    def function(self, x, multi=False):
-        if multi:
-            yscale = self.yscale.map['values'][...,None]
-            xscale = self.xscale.map['values'][...,None]
-            shift = self.shift.map['values'][...,None]
-        else:
-            yscale = self.yscale.value
-            xscale = self.xscale.value
-            shift = self.shift.value
-
+    def function(self, x):
         if self.interpolate is True:
-            result = yscale * self.f(
-                x * xscale - shift)
+            result = self.yscale.value * self.f(
+                x * self.xscale.value - self.shift.value)
         else:
-            result = yscale * self.signal.data
+            result = self.yscale.value * self.signal.data
         if self.signal.metadata.Signal.binned is True:
             return result / self.signal.axes_manager.signal_axes[0].scale
         else:

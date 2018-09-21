@@ -61,19 +61,9 @@ class PowerLaw(Component):
         self.isbackground = True
         self.convolved = False
 
-        # Linearity
-        self.A._is_linear = True
-
-    def function(self, x, multi=False):
-        if multi:
-            A = self.A.map['values'][...,None]
-            r = self.r.map['values'][...,None]
-            origin = self.origin.map['values'][...,None]
-        else:
-            A = self.A.value
-            r = self.r.value
-            origin = self.origin.value
-        return np.where(x > self.left_cutoff, A *(x - origin) ** (-r), 0)
+    def function(self, x):
+        return np.where(x > self.left_cutoff, self.A.value *
+                        (x - self.origin.value) ** (-self.r.value), 0)
 
     def grad_A(self, x):
         return self.function(x) / self.A.value
@@ -145,7 +135,7 @@ class PowerLaw(Component):
             else:
                 r = np.nan_to_num(r)
                 A = np.nan_to_num(A)
-        except BaseException:
+        except:
             return False
         if only_current is True:
             self.r.value = r

@@ -23,8 +23,7 @@ from hyperspy.component import Component
 
 class VolumePlasmonDrude(Component):
 
-    r"""Drude volume plasmon energy loss function component, the energy loss
-    function is defined as:
+    """Drude volume plasmon energy loss function component
 
     .. math::
 
@@ -39,7 +38,7 @@ class VolumePlasmonDrude(Component):
     +------------+-----------------+
     | delta_E_p  |      fwhm       |
     +------------+-----------------+
-    | intensity  |    intensity    |
+    | intensity  |   intensity     |
     +------------+-----------------+
 
     Notes
@@ -62,18 +61,10 @@ class VolumePlasmonDrude(Component):
         self.fwhm.grad = self.grad_fwhm
         self.intensity.grad = self.grad_intensity
 
-        # Linearity
-        self.intensity._is_linear = True
-
-    def function(self, x, multi=False):
-        if multi:
-            plasmon_energy = self.plasmon_energy.map['values'][...,None]
-            fwhm = self.fwhm.map['values'][...,None]
-            intensity = self.intensity.map['values'][...,None]
-        else:
-            plasmon_energy = self.plasmon_energy.value
-            fwhm = self.fwhm.value
-            intensity = self.intensity.value
+    def function(self, x):
+        plasmon_energy = self.plasmon_energy.value
+        fwhm = self.fwhm.value
+        intensity = self.intensity.value
         pe2 = plasmon_energy ** 2
         return np.where(
             x > 0,
