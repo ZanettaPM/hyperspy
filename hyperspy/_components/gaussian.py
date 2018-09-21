@@ -49,7 +49,7 @@ def _estimate_gaussian_parameters(signal, x1, x2, only_current):
     if isinstance(data, da.Array):
         _sum = da.sum
         _sqrt = da.sqrt
-        _abs = da.numpy_compat.builtins.abs
+        _abs = abs
     else:
         _sum = np.sum
         _sqrt = np.sqrt
@@ -116,10 +116,18 @@ class Gaussian(Component):
         self.sigma.grad = self.grad_sigma
         self.centre.grad = self.grad_centre
 
-    def function(self, x):
-        A = self.A.value
-        s = self.sigma.value
-        c = self.centre.value
+        # Linearity
+        self.A._is_linear = True
+
+    def function(self, x, multi=False):
+        if multi:
+            A = self.A.map['values'][..., None]
+            s = self.sigma.map['values'][..., None]
+            c = self.centre.map['values'][..., None]
+        else:
+            A = self.A.value
+            s = self.sigma.value
+            c = self.centre.value
         return A * (1 / (s * sqrt2pi)) * np.exp(-(x - c)**2 / (2 * s**2))
 
     def grad_A(self, x):

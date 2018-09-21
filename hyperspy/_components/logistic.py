@@ -37,9 +37,13 @@ class Logistic(Component):
 
     """
 
-    def __init__(self):
+    def __init__(self, a=1, b=1, c=1, origin=0):
         # Define the parameters
         Component.__init__(self, ('a', 'b', 'c', 'origin'))
+        self.a.value = a
+        self.b.value = b
+        self.c.value = c
+        self.origin.value = origin
         # Define the name of the component
         self.a.grad = self.grad_a
         self.b.grad = self.grad_b
@@ -47,12 +51,18 @@ class Logistic(Component):
         self.origin.grad = self.grad_origin
         self._position = self.origin
 
-    def function(self, x):
-        """
-        """
-        a = self.a.value
-        b = self.b.value
-        c = self.c.value
+        # Linearity
+        self.a._is_linear = True
+        
+    def function(self, x, multi=False):
+        if multi:
+            a = self.a.map['values'][...,None]
+            b = self.b.map['values'][...,None]
+            c = self.c.map['values'][...,None]
+        else:
+            a = self.a.value
+            b = self.b.value
+            c = self.c.value
         origin = self.origin.value
         return a / (1 + b * np.exp(-c * (x - origin)))
 

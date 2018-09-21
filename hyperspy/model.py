@@ -44,6 +44,8 @@ from hyperspy.misc.export_dictionary import (export_to_dictionary,
 from hyperspy.misc.utils import (slugify, shorten_name, stash_active_state,
                                  dummy_context_manager)
 from hyperspy.misc.slicing import copy_slice_from_whitelist
+from hyperspy.misc.model_tools import (linear_regression, get_top_parent_twin,
+                                       standard_error_from_covariance)
 from hyperspy.events import Events, Event, EventSuppressor
 import warnings
 from hyperspy.exceptions import VisibleDeprecationWarning
@@ -57,6 +59,8 @@ _logger = logging.getLogger(__name__)
 
 class DummyComponentsContainer:
     pass
+
+
 components = DummyComponentsContainer()
 components.__dict__.update(components1d.__dict__)
 components.__dict__.update(components2d.__dict__)
@@ -110,7 +114,7 @@ class BaseModel(list):
 
     A model is constructed as a linear combination of :mod:`components` that
     are added to the model using :meth:`append` or :meth:`extend`. There
-    are many predifined components available in the in the :mod:`components`
+    are many predefined components available in the in the :mod:`components`
     module. If needed, new components can be created easily using the code of
     existing components as a template.
 
@@ -135,7 +139,7 @@ class BaseModel(list):
         Reduced chi-squared.
     components : `ModelComponents` instance
         The components of the model are attributes of this class. This provides
-        a convinient way to access the model components when working in IPython
+        a convenient way to access the model components when working in IPython
         as it enables tab completion.
 
     Methods
@@ -204,7 +208,7 @@ class BaseModel(list):
 
         self.events = Events()
         self.events.fitted = Event("""
-            Event that triggers after fitting changed at least one paramter.
+            Event that triggers after fitting changed at least one parameter.
 
             The event triggers after the fitting step was finished, and only of
             at least one of the parameters changed.
@@ -214,6 +218,7 @@ class BaseModel(list):
             obj : Model
                 The Model that the event belongs to
             """, arguments=['obj'])
+        self._is_multifit = False
 
     def __hash__(self):
         # This is needed to simulate a hashable object so that PySide does not
@@ -405,16 +410,17 @@ class BaseModel(list):
     def as_signal(self, component_list=None, out_of_range_to_nan=True,
                   show_progressbar=None, out=None, parallel=None):
         """Returns a recreation of the dataset using the model.
-        the spectral range that is not fitted is filled with nans.
+        The spectral range that is not fitted is filled with nans.
 
         Parameters
         ----------
-        component_list : list of hyperspy components, optional
+        component_list : list of HyperSpy components, optional
             If a list of components is given, only the components given in the
             list is used in making the returned spectrum. The components can
             be specified by name, index or themselves.
         out_of_range_to_nan : bool
             If True the spectral range that is not fitted is filled with nans.
+            Default True.
         show_progressbar : None or bool
             If True, display a progress bar. If None the default is set in
             `preferences`.
@@ -423,7 +429,7 @@ class BaseModel(list):
             processing. If None (default), creates a new one. If passed, it is
             assumed to be of correct shape and dtype and not checked.
         parallel : bool, int
-            If True or more than 1, perform the recreation parallely using as
+            If True or more than 1, perform the recreation parallel using as
             many threads as specified. If True, as many threads as CPU cores
             available are used.
 
@@ -443,6 +449,8 @@ class BaseModel(list):
         >>> s2 = m.as_signal(component_list=[l1])
 
         """
+        if show_progressbar is None:
+            show_progressbar = preferences.General.show_progressbar
         if parallel is None:
             parallel = preferences.General.parallel
         if out is None:
@@ -500,7 +508,7 @@ class BaseModel(list):
                         data=thing[1],
                         component_list=component_list,
                         out_of_range_to_nan=out_of_range_to_nan,
-                        show_progressbar=thing[2] + 1),
+                        show_progressbar=thing[2] + 1 if show_progressbar else False),
                     zip(models, data_slices, range(int(parallel))))
             _ = next(_map)
         return signal
@@ -544,7 +552,7 @@ class BaseModel(list):
 
     @property
     def _plot_active(self):
-        if self._plot is not None and self._plot.is_active() is True:
+        if self._plot is not None and self._plot.is_active:
             return True
         else:
             return False
@@ -554,19 +562,20 @@ class BaseModel(list):
             return
         for i, component in enumerate(components):
             component.events.active_changed.connect(
-                self._model_line.update, [])
+                self._model_line._auto_update_line, [])
             for parameter in component.parameters:
                 parameter.events.value_changed.connect(
-                    self._model_line.update, [])
+                    self._model_line._auto_update_line, [])
 
     def _disconnect_parameters2update_plot(self, components):
         if self._model_line is None:
             return
         for component in components:
-            component.events.active_changed.disconnect(self._model_line.update)
+            component.events.active_changed.disconnect(
+                self._model_line._auto_update_line)
             for parameter in component.parameters:
                 parameter.events.value_changed.disconnect(
-                    self._model_line.update)
+                    self._model_line._auto_update_line)
 
     def update_plot(self, *args, **kwargs):
         """Update model plot.
@@ -580,11 +589,12 @@ class BaseModel(list):
         """
         if self._plot_active is True and self._suspend_update is False:
             try:
-                self._update_model_line()
+                if self._model_line is not None:
+                    self._model_line.update()
                 for component in [component for component in self if
                                   component.active is True]:
                     self._update_component_line(component)
-            except:
+            except BaseException:
                 self._disconnect_parameters2update_plot(components=self)
 
     @contextmanager
@@ -599,14 +609,14 @@ class BaseModel(list):
         es = EventSuppressor()
         es.add(self.axes_manager.events.indices_changed)
         if self._model_line:
-            f = self._model_line.update
+            f = self._model_line._auto_update_line
             for c in self:
                 es.add(c.events, f)
                 for p in c.parameters:
                     es.add(p.events, f)
         for c in self:
             if hasattr(c, '_model_plot_line'):
-                f = c._model_plot_line.update
+                f = c._model_plot_line._auto_update_line
                 es.add(c.events, f)
                 for p in c.parameters:
                     es.add(p.events, f)
@@ -620,26 +630,16 @@ class BaseModel(list):
         if update_on_resume is True:
             self.update_plot()
 
-    def _update_model_line(self):
-        if (self._plot_active is True and
-                self._model_line is not None):
-            self._model_line.update()
-
     def _close_plot(self):
         if self._plot_components is True:
             self.disable_plot_components()
         self._disconnect_parameters2update_plot(components=self)
         self._model_line = None
 
-    def _update_model_line(self):
-        if (self._plot_active is True and
-                self._model_line is not None):
-            self._model_line.update()
-
     @staticmethod
     def _connect_component_line(component):
         if hasattr(component, "_model_plot_line"):
-            f = component._model_plot_line.update
+            f = component._model_plot_line._auto_update_line
             component.events.active_changed.connect(f, [])
             for parameter in component.parameters:
                 parameter.events.value_changed.connect(f, [])
@@ -647,7 +647,7 @@ class BaseModel(list):
     @staticmethod
     def _disconnect_component_line(component):
         if hasattr(component, "_model_plot_line"):
-            f = component._model_plot_line.update
+            f = component._model_plot_line._auto_update_line
             component.events.active_changed.disconnect(f)
             for parameter in component.parameters:
                 parameter.events.value_changed.disconnect(f)
@@ -691,12 +691,14 @@ class BaseModel(list):
 
     def _set_p0(self):
         self.p0 = ()
+        self.free_parameters = ()
         for component in self:
             if component.active:
                 for parameter in component.free_parameters:
                     self.p0 = (self.p0 + (parameter.value,)
                                if parameter._number_of_elements == 1
                                else self.p0 + parameter.value)
+                    self.free_parameters = self.free_parameters + (parameter, )
 
     def set_boundaries(self):
         """Generate the boundary list.
@@ -780,7 +782,7 @@ class BaseModel(list):
 
         Parameters
         ----------
-        only_fixed : bool
+        only_fixed : bool, optional
             If True, only the fixed parameters are fetched.
 
         See Also
@@ -795,13 +797,12 @@ class BaseModel(list):
                 component.fetch_stored_values(only_fixed=only_fixed)
 
     def _fetch_values_from_p0(self, p_std=None):
-        """Fetch the parameter values from the output of the optimzer `self.p0`
+        """Fetch the parameter values from the output of the optimizer `self.p0`
 
         Parameters
         ----------
-        p_std : array
-            array containing the corresponding standard deviatio
-            n
+        p_std : array, optional
+            array containing the corresponding standard deviation.
 
         """
         comp_p_std = None
@@ -839,6 +840,374 @@ class BaseModel(list):
         self._fetch_values_from_p0()
         to_return = self.__call__(non_convolved=False, onlyactive=True)
         return to_return
+
+    def _check_all_active_components_are_linear(self):
+        "Loops through active components checking all parameters are linear"
+        for comp in self:
+            if comp.active:
+                for parameter in comp.parameters:
+                    if parameter.free:
+                        if not parameter._is_linear:
+                            return False
+        return True
+
+    def _get_nonlinear_parameters(self):
+        "Returning list of all active nonlinear components"
+        nonlinear = []
+        for comp in self:
+            if comp.active:
+                for parameter in comp.parameters:
+                    if parameter.free:
+                        if not parameter._is_linear:
+                            nonlinear.append(parameter)  # component is not linear
+                            break
+        return nonlinear
+
+    def _check_and_set_linear_parameters_not_zero(self):
+        '''Set linear parameters value to be 1 if 0.
+        Raise warning about parameters that are fixed but also = 0
+        '''
+
+        linpara = []
+        nonlinpara = []
+        for comp in self:
+            if comp.active:
+                # Don't want warnings about inactive fine struc
+                # Could create an equivalent method in eelsmodel
+                # And remove the following fine struc block from model.py
+                try:
+                    fine_structure = comp.fine_structure_active
+                except:
+                    fine_structure = None
+                for parameter in comp.parameters:
+                    if parameter.name == "fine_structure_coeff":
+                        if fine_structure is False:
+                            continue
+                    if self._is_multifit:
+                        if (parameter.map['values'] == 0).any():
+                            if parameter.free:
+                                parameter.map['values'] = 1
+                                parameter.map['is_set'] = True
+                                linpara.append(parameter)
+                            else:
+                                nonlinpara.append(parameter)
+                    else:
+                        # sum takes into account para.value that are tuples
+                        if np.sum(parameter.value) == 0:
+                            if parameter.free:
+                                parameter._set_value(1)
+                                linpara.append(parameter)
+                            else:
+                                nonlinpara.append(parameter)
+        if linpara:
+            text = ["\t{}".format(p) for p in linpara]
+            text = "\n".join(text)
+            logging.info('The value of these parameters were changed'
+                         ' to be = 1 for linear fitting\n{}'.format(text))
+        if nonlinpara:
+            text = ["\t{}".format(p) for p in nonlinpara]
+            text = "\n".join(text)
+            val = 'para.values["map"]' if self._is_multifit else 'para.value'
+            logging.warning('The value of the following parameters is '
+                            'zero. \nIf this is correct, ignore this '
+                            'message, otherwise check '
+                            '{}\n{}'.format(val, text))
+
+    def _check_if_ll_constant(self):
+        try:
+            self.low_loss
+            pass
+        except:
+            return True
+        ll = self.low_loss
+        if not ll:
+            return True
+        if not ll.axes_manager.navigation_size:
+            return True
+        n = len(ll.axes_manager.navigation_shape)
+        if (ll.data[n*(0,)] == ll.data).all():
+            return True
+        return False
+
+    def _check_if_value_map_uniform(self):
+        '''Check if all parameters value maps are uniform - i.e. if
+        a = para.map['values], satisfies (a == a[0]).all()
+        If so, set _uniform_comp_map_vals = True, else False.'''
+        _uniform_comp_map_vals = True
+        for comp in self:
+            if comp.active and comp.free_parameters:
+                for para in comp.parameters:
+                    if not (
+                        para.map['values'].flat[0] == para.map['values']
+                    ).all():
+                        _uniform_comp_map_vals = False
+                        break
+        return _uniform_comp_map_vals
+
+    def p0_index_from_component(self, component):
+        'Get p0 index for components that have only one free parameter'
+        return self.free_parameters.index(component.free_parameters[0])
+
+    def p0_index_from_parameter(self, parameter):
+        'For components that have multiple free parameters'
+        return self.free_parameters.index(parameter)
+
+    def _assign_twin_value_maps(self):
+        'Set the correct values map for the twinned parameters'
+        for para in self.twinned_parameters:
+            if self._compute_comp_all_pixels:
+                para.map['values'] = para.twin_function(
+                    para.twin.map['values']) if para.twin_function \
+                    else para.twin.map['values']
+            else:
+                # Superfluous as it should be set already, but it's cheap
+                para.value = para.twin_function(
+                    para.twin.value) if para.twin_function else para.twin.value
+
+    def _set_twinned_lists(self):
+        'Create lists of twinned components and their parents'
+        self.twinned_components_parents = []
+        self.twinned_parameters_parents = []
+        self.twinned_components = []
+        self.twinned_parameters = []
+        for comp in self:
+            for para in comp.parameters:
+                if para.twin and para._is_linear:
+                    self.twinned_components.append(comp)
+                    self.twinned_parameters.append(para)
+                    parent = get_top_parent_twin(para)
+                    self.twinned_parameters_parents.append(parent)
+                    self.twinned_components_parents.append(parent.component)
+
+    def _append_component(self, component):
+        '''The following code works for a component where ax+b/x+c can be
+        multiple pseudo components, not only one'''
+        multi = self._compute_comp_all_pixels
+        if component in self.twinned_components:
+            # These twinned components have a linear parameter that is twinned
+            i = self.twinned_components.index(component)
+            parent_twin = self.twinned_components_parents[i]
+            if parent_twin.free_parameters:
+                index = self.p0_index_from_component(
+                    self.twinned_components_parents[i])
+            # Need to multiply comp and const by the twin_function - if there is one!
+            # Might be enough just to use the twin_function of the linear parameter directly!
+            if parent_twin.free_parameters:
+                # If parent component is not free, there is nothing to compute here.
+                COMP = component._compute_component(multi=multi)
+                if self.twinned_parameters[i].twin_function and multi:
+                    COMP = self.twinned_parameters[i].twin_function(COMP)
+            else:
+                COMP = 0
+            CONST = component._compute_constant_term(multi=multi)            
+            if self.twinned_parameters[i].twin_function:
+                # TODO: Check whether "and multi" should be included in if above
+                CONST = self.twinned_parameters[i].twin_function(CONST)                 
+            if parent_twin.free_parameters:
+                if multi:
+                    self.comp_data[..., index, :] += COMP - CONST
+                else:
+                    self.comp_data[index, :] += COMP - CONST
+            self.fixed_comp_data[:] += CONST
+
+        elif component.free_parameters:
+            # linear component to fit, with constant part
+            # Constant part of just linear components
+            index = self.p0_index_from_component(component)
+            if len(component.free_parameters) == 1:
+                COMP = component._compute_component(multi=multi)
+                CONST = component._compute_constant_term(multi=multi)
+                if multi:
+                    self.comp_data[..., index, :] += COMP - CONST
+                else:
+                    self.comp_data[index, :] += COMP - CONST
+                self.fixed_comp_data[:] += CONST
+            else:
+                # Check that this component is based on Expression
+                assert component._str_expression, \
+                    "Component {} has more than one free parameter, " \
+                    "which is only supported for Expression type " \
+                    "components."
+                free, fixed = component._separate_pseudocomponents()
+                for free_parameter in component.free_parameters:
+                    index = self.p0_index_from_parameter(free_parameter)
+                    self.comp_data[..., index, :] += component._compute_expression_part(
+                        free[free_parameter.name], multi=multi)
+                self.fixed_comp_data[:] += component._compute_expression_part(fixed,
+                                                                              multi=multi)
+        else:
+            # No free parameters, so component is a fixed.
+            # Entire value of fixed components
+            self.fixed_comp_data[:] += component._compute_component(
+                multi=multi)
+    def _remove_any_zero_components(self):
+        '''Remove any zero-components from the comp_data
+        
+        If any component.function comes out as zero in the signal_range being fitted,
+        it should not be attempted fitted to the region. This method removes it from the array,
+        and skips the coefficient multiplication later on for that parameter.
+        '''
+        axis = self.axes_manager.navigation_dimension if self._compute_comp_all_pixels else 0
+        if self._compute_comp_all_pixels:
+            self._zero_comp_indices = np.where(np.any(np.invert(self.comp_data.any(axis=axis+1)), axis=self.axes_manager.navigation_indices_in_array))[0]
+        else:
+            self._zero_comp_indices = np.where(np.invert(self.comp_data.any(axis=1)))[0]
+        self.comp_data = np.delete(self.comp_data, self._zero_comp_indices, axis=axis)
+        if self._is_multifit:
+            self.coefficient_array = np.delete(self.coefficient_array, self._zero_comp_indices, axis=self.axes_manager.navigation_dimension)
+        else:
+            self.coefficient_array = np.delete(self.coefficient_array, self._zero_comp_indices, axis=0)
+
+
+    def calculate_covariance_matrix(self):
+        '''Calculate covariance matrix after having performed Linear Regression
+        Parameters:
+        fit: The resultant fit after performing fitting, same shape as b
+        A: Matrix containing the result of computing each free component
+        b: The raw data fitted to after fixed-component subtraction
+        '''
+        n = np.count_nonzero(self.channel_switches)  # the signal axis length
+        k = self.comp_data.shape[-2]  # the number of components
+        if self._is_multifit:
+            nav_shape = self.axes_manager._navigation_shape_in_array
+        else:
+            nav_shape = ()
+
+        fit = np.zeros(nav_shape + (n, k))
+        # Either comp_data is the same across all nav, or not.
+        if self._uniform_comp_map_vals:
+            for index in np.ndindex(nav_shape):
+                fit[index] = (self.comp_data.T * self.coefficient_array[index])
+        else:
+            for index in np.ndindex(nav_shape):
+                fit[index] = (self.comp_data[index].T *
+                              self.coefficient_array[index])
+        res = self.y - fit.sum(-1)  # The residual
+        res_dot = np.zeros(nav_shape)
+        for index in np.ndindex(nav_shape):
+            res_dot[index] = np.dot(res[index].T, res[index])
+
+        fit_dot = np.matmul(fit.swapaxes(-2, -1), fit)
+        inv_fit_dot = np.linalg.inv(fit_dot)
+        covariance = np.zeros(nav_shape + (k, k))
+        for index in np.ndindex(nav_shape):
+            covariance[index] = (1 / (n - k)) * \
+                np.dot(res_dot[index], inv_fit_dot[index])
+        return covariance
+
+    def _linear_fitting(self, multifit=False):
+        'Parent method for fitting using multivariate linear regression'
+        nonlinear = self._get_nonlinear_parameters()
+        not_linear_error = "Not all free parameters are linear. " \
+            "Fit with a " \
+            "different fitter or set non-linear " \
+            "`parameters.free = False`. These " \
+            "parameters are nonlinear:"
+        if nonlinear:
+            raise AttributeError(not_linear_error + str(nonlinear))
+
+        self._is_multifit = multifit
+        self._constant_ll = self._check_if_ll_constant()
+
+        self._check_and_set_linear_parameters_not_zero()
+        self._set_p0()
+        if self._is_multifit:
+            self._uniform_comp_map_vals = self._check_if_value_map_uniform() \
+                and self._constant_ll
+
+            # Then we only need to calculate the component data array once
+        else:
+            self._uniform_comp_map_vals = False
+        # Set whether components are not equal across the nav space
+        self._compute_comp_all_pixels = self._is_multifit and \
+            not self._uniform_comp_map_vals
+        n_free_para = len(self.free_parameters)
+        assert n_free_para > 0, \
+            'Model does not contain any free components!'
+        channels_signal_shape = np.count_nonzero(self.channel_switches)
+        arr_nav_shape = self.axes_manager._navigation_shape_in_array
+        nav_shape = arr_nav_shape if self._is_multifit else ()
+        comp_nav_shape = () if self._uniform_comp_map_vals else nav_shape
+
+        self.comp_data = np.zeros(
+            comp_nav_shape + (n_free_para, channels_signal_shape)
+        )
+        self.comp_data_constant_values = self.comp_data.copy()
+        self.fixed_comp_data = np.zeros(
+            comp_nav_shape + (channels_signal_shape, ))
+
+        self.coefficient_array = np.zeros(
+            nav_shape + (n_free_para,))
+        self._set_twinned_lists()
+        self._assign_twin_value_maps()
+        for component in self:
+            if component.active:
+                self._append_component(component)
+
+        # The linear components
+        self.comp_data = self.comp_data - self.comp_data_constant_values
+        self._remove_any_zero_components()
+
+        if self._is_multifit:
+            y = self.signal.data.T[np.where(self.channel_switches.T)].T
+        else:
+            y = self.signal()[np.where(self.channel_switches)]
+
+        if self.signal.metadata.Signal.binned is True:
+            y = y / self.signal.axes_manager[-1].scale
+
+        y = y - self.fixed_comp_data  # - model_constant_term
+
+        comp_data_shape = self.comp_data.shape
+        sig1Dshape = np.count_nonzero(self.channel_switches)
+
+        # Reshape what may potentially be Signal2D data into a long Signal1D shape
+        y = y.reshape(nav_shape + (sig1Dshape,))
+        self.y = y
+
+        if self._is_multifit:
+            if self._uniform_comp_map_vals:
+                self.coefficient_array[:] = linear_regression(
+                    y, self.comp_data)
+            else:
+                for index in np.ndindex(nav_shape):
+                    self.coefficient_array[index] = linear_regression(
+                        y[index], self.comp_data[index])
+            covariance = self.calculate_covariance_matrix()
+            standard_error = standard_error_from_covariance(covariance)
+            j = 0 # counter to skip any zero-components
+            for i, para in enumerate(self.free_parameters):
+                if i in self._zero_comp_indices:
+                    j += 1
+                    pass
+                else:
+                    para.map['values'] = para.map['values'] * \
+                        self.coefficient_array[..., i-j]
+                    para.map['std'] = np.abs(
+                        para.map['values']*standard_error[..., i-j])
+                    para.map['is_set'] = True
+        else:
+            self.coefficient_array[:] = linear_regression(y, self.comp_data)
+            covariance = self.calculate_covariance_matrix()
+            standard_error = standard_error_from_covariance(covariance)
+            oldp0 = self.p0
+            self.p0 = ()
+            self.p_std = ()
+            j = 0
+            for i, p in enumerate(oldp0):
+                if i in self._zero_comp_indices:
+                    self.p0 += (0,)
+                    self.p_std += (np.nan,)
+                    j += 1
+                else:
+                    p0 = p * self.coefficient_array[i-j]
+                    self.p0 += (p0,)
+                    self.p_std += (p0*standard_error[i-j],) 
+            self.store_current_values()
+            # reshape back from potentially Signal2D data
+            self.comp_data = self.comp_data.reshape(comp_data_shape)
+        self.fetch_stored_values()
+        self._compute_comp_all_pixels = False
 
     def _errfunc2(self, param, y, weights=None):
         if weights is None:
@@ -900,11 +1269,16 @@ class BaseModel(list):
         fitter : {"leastsq", "mpfit", "odr", "Nelder-Mead",
                  "Powell", "CG", "BFGS", "Newton-CG", "L-BFGS-B", "TNC",
                  "Differential Evolution"}
-            The optimization algorithm used to perform the fitting. Deafault
-            is "leastsq".
+            The optimization algorithm used to perform the fitting. The default
+            is "leastsq" when there are free non-linear parameters and "linear"
+            when the free parameters are all linear.
 
                 "leastsq" performs least-squares optimization, and supports
                 bounds on parameters.
+
+                "linear" performs least-squares fitting using linear
+                regression. Very fast and supports bounds, but does not
+                allow fitting of non-linear parameters.
 
                 "mpfit" performs least-squares using the Levenberg–Marquardt
                 algorithm and supports bounds on parameters.
@@ -956,8 +1330,11 @@ class BaseModel(list):
 
         """
 
-        if fitter is None:  # None meant "from preferences" before v1.3
-            fitter = "leastsq"
+        if fitter is None:
+            if self._check_all_active_components_are_linear():
+                fitter = "linear"
+            else:
+                fitter = 'leastsq'
         switch_aap = (update_plot != self._plot_active)
         if switch_aap is True and update_plot is False:
             cm = self.suspend_update
@@ -983,11 +1360,11 @@ class BaseModel(list):
 
         if bounded is True:
             if fitter not in ("leastsq", "mpfit", "TNC",
-                              "L-BFGS-B", "Differential Evolution"):
+                              "L-BFGS-B", "Differential Evolution", "linear"):
                 raise ValueError("Bounded optimization is only "
                                  "supported by 'leastsq', "
-                                 "'mpfit', 'TNC', 'L-BFGS-B' or"
-                                 "'Differential Evolution'.")
+                                 "'mpfit', 'TNC', 'L-BFGS-B', "
+                                 "'Differential Evolution' or 'linear'.")
             else:
                 # this has to be done before setting the p0,
                 # so moved things around
@@ -1014,11 +1391,12 @@ class BaseModel(list):
 
             if method == 'ml':
                 weights = None
-                if fitter in ("leastsq", "odr", "mpfit"):
+                if fitter in ("leastsq", "odr", "mpfit", "linear"):
                     raise NotImplementedError(
                         "Maximum likelihood estimation is not supported "
-                        'for the "leastsq", "mpfit" or "odr" optimizers')
+                        'for the "leastsq", "mpfit", "odr", or "linear" optimizers')
             elif method == "ls":
+
                 metadata = self.signal.metadata
                 if "Signal.Noise_properties.variance" not in metadata:
                     variance = 1
@@ -1131,6 +1509,9 @@ class BaseModel(list):
                         (self._errfunc(self.p0, *args) ** 2).sum() /
                         (len(args[0]) - len(self.p0)))
                 self.fit_output = m
+
+            elif fitter == "linear":
+                self._linear_fitting(bounded)
             else:
                 # General optimizers
                 # Least squares or maximum likelihood
@@ -1215,19 +1596,19 @@ class BaseModel(list):
         Parameters
         ----------
 
-        mask : {None, numpy.array}
+        mask : NumPy array, optional
             To mask (do not fit) at certain position pass a numpy.array
             of type bool where True indicates that the data will not be
             fitted at the given position.
         fetch_only_fixed : bool
             If True, only the fixed parameters values will be updated
-            when changing the positon.
+            when changing the positon. Default False.
         autosave : bool
             If True, the result of the fit will be saved automatically
-            with a frequency defined by autosave_every.
+            with a frequency defined by autosave_every. Default False.
         autosave_every : int
             Save the result of fitting every given number of spectra.
-
+            Default 10.
         show_progressbar : None or bool
             If True, display a progress bar. If None the default is set in
             `preferences`.
@@ -1246,6 +1627,17 @@ class BaseModel(list):
         fit
 
         """
+        # try:
+        if "fitter" in kwargs.keys():
+            fitter = kwargs['fitter']
+        else:
+            fitter = None
+        if fitter == 'linear':
+            self._linear_fitting(multifit=True)
+            return
+        # except:
+        #    pass
+
         if show_progressbar is None:
             show_progressbar = preferences.General.show_progressbar
 
@@ -1590,11 +1982,11 @@ class BaseModel(list):
         Parameters
         ----------
         parameter_name : string
-            Name of the parameter whos value will be changed
+            Name of the parameter whose value will be changed
         value : number
             The new value of the parameter
         component_list : list of hyperspy components, optional
-            A list of components whos parameters will changed. The components
+            A list of components whose parameters will changed. The components
             can be specified by name, index or themselves.
 
         only_current : bool, default False
@@ -1695,7 +2087,7 @@ class BaseModel(list):
         value : bool
             The new value of the 'active' parameter
         component_list : list of hyperspy components, optional
-            A list of components whos parameters will changed. The components
+            A list of components whose parameters will changed. The components
             can be specified by name, index or themselves.
 
         only_current : bool, default False
