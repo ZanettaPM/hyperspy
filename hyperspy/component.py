@@ -17,22 +17,24 @@
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import functools
+import warnings
 
 import numpy as np
-from scipy.ndimage import convolve1d
-from dask.array import Array as dArray
 import traits.api as t
 from traits.trait_numeric import Array
 import sympy
 from sympy.utilities.lambdify import lambdify
 
+from hyperspy.defaults_parser import preferences
 from hyperspy.misc.utils import slugify
 from hyperspy.misc.io.tools import (incremental_filename,
                                     append2pathname,)
+from hyperspy.exceptions import NavigationDimensionError
 from hyperspy.misc.export_dictionary import export_to_dictionary, \
     load_from_dictionary
 from hyperspy.events import Events, Event
-from hyperspy.ui_registry import add_gui_method
+from hyperspy.ui_registry import add_gui_method, register_toolkey
 
 import logging
 
@@ -177,7 +179,6 @@ class Parameter(t.HasTraits):
                            'self': ('id', None),
                            }
         self._slicing_whitelist = {'map': 'inav'}
-        self._is_linear = False
 
     def _load_dictionary(self, dictionary):
         """Load data from dictionary
@@ -205,7 +206,7 @@ class Parameter(t.HasTraits):
             load_from_dictionary(self, dictionary)
             return dictionary['self']
         else:
-            raise ValueError("_id_name of parameter and dictionary do not match, \nparameter._id_name = %s\
+            raise ValueError( "_id_name of parameter and dictionary do not match, \nparameter._id_name = %s\
                     \ndictionary['_id_name'] = %s" % (self._id_name, dictionary['_id_name']))
 
     def __repr__(self):
@@ -246,7 +247,7 @@ class Parameter(t.HasTraits):
                 inv = sympy.solveset(sympy.Eq(y, expr), x)
                 self._twin_inverse_sympy = lambdify(y, inv)
                 self._twin_inverse_function = None
-            except BaseException:
+            except:
                 # Not all may have a suitable solution.
                 self._twin_inverse_function = None
                 self._twin_inverse_sympy = None
@@ -517,14 +518,8 @@ class Parameter(t.HasTraits):
         if not indices:
             indices = (0,)
         if self.map['is_set'][indices]:
-            value = self.map['values'][indices]
-            std = self.map['std'][indices]
-            if isinstance(value, dArray):
-                value = value.compute()
-            if isinstance(std, dArray):
-                std = std.compute()
-            self.value = value
-            self.std = std
+            self.value = self.map['values'][indices]
+            self.std = self.map['std'][indices]
 
     def assign_current_value_to_all(self, mask=None):
         """Assign the current value attribute to all the  indices
@@ -1011,10 +1006,10 @@ class Component(t.HasTraits):
         -------
         numpy array
         """
-        axes = [ax.axis for ax in self.model.axes_manager.signal_axes]
-        mesh = np.meshgrid(*axes)
-        component_array = self.function(*mesh)
-        return component_array[np.where(self.model.channel_switches)]
+
+        axis = self.model.axis.axis[self.model.channel_switches]
+        component_array = self.function(axis)
+        return component_array
 
     def _component2plot(self, axes_manager, out_of_range2nans=True):
         old_axes_manager = None
@@ -1022,9 +1017,11 @@ class Component(t.HasTraits):
             old_axes_manager = self.model.axes_manager
             self.model.axes_manager = axes_manager
             self.fetch_stored_values()
-        s = self.model.__call__(component_list=[self])
+        s = self.__call__()
         if not self.active:
             s.fill(np.nan)
+        if self.model.signal.metadata.Signal.binned is True:
+            s *= self.model.signal.axes_manager.signal_axes[0].scale
         if old_axes_manager is not None:
             self.model.axes_manager = old_axes_manager
             self.charge()
@@ -1179,84 +1176,5 @@ class Component(t.HasTraits):
                         "_id_name of parameters in component and dictionary do not match")
             return id_dict
         else:
-            raise ValueError("_id_name of component and dictionary do not match, \ncomponent._id_name = %s\
+            raise ValueError( "_id_name of component and dictionary do not match, \ncomponent._id_name = %s\
                     \ndictionary['_id_name'] = %s" % (self._id_name, dic['_id_name']))
-
-    @property
-    def is_linear(self):
-        """Loops through the components free parameters,
-        checks that they are linear"""
-        linear = True
-        for para in self.free_parameters:
-            if not para._is_linear:
-                linear = False
-        return linear
-
-    def get_constant_term(self, multi=False):
-        """Get value of the constant term of the component.
-        Returns 0 for most components."""
-        if multi:
-            nav_shape = self.model.axes_manager._navigation_shape_in_array
-            sig_dim = self.model.axes_manager.signal_dimension
-            return np.zeros(nav_shape + sig_dim*(1,))
-        else:
-            return 0
-
-    def _compute_component(self, multi=False):
-        model = self.model
-        if model.convolved and self.convolved:
-            # TODO: Model2D doesn't support a 2D convolution axis (yet)
-            data = self._convolve(
-                self.function(model.convolution_axis, multi=multi), model=model)
-        else:
-            axes = [ax.axis for ax in model.axes_manager.signal_axes]
-            mesh = np.meshgrid(*axes)
-            not_convolved = self.function(*mesh, multi=multi)
-            data = not_convolved
-        return data.T[np.where(model.channel_switches)[::-1]].T
-
-    def _compute_constant_term(self, multi=False):
-        model = self.model
-        if model.convolved and self.convolved:
-            convolved = self._convolve(
-                self.get_constant_term(multi=multi), model=model)
-            data = convolved
-        else:
-            signal_shape = model.axes_manager.signal_shape[::-1]
-            not_convolved = self.get_constant_term(
-                multi) * np.ones(signal_shape)
-            data = not_convolved
-        return data.T[np.where(model.channel_switches)[::-1]].T
-
-    def _convolve(self, to_convolve, model=None):
-        '''Convolve component with model convolution axis
-
-        Multiply by np.ones in order to handle constant case - has no effect on
-        the large'''
-
-        if model is None:
-            model = self.model
-        sig = to_convolve * np.ones(model.convolution_axis.shape)
-
-        if not self.model._compute_comp_all_pixels:
-            # handle fast case when ll is equal in all pixels
-            ll = model.low_loss(model.axes_manager)
-            convolved = np.convolve(sig, ll, mode="valid")
-        elif self.model._compute_comp_all_pixels and self.model._constant_ll:
-            nav_shape = model.axes_manager._navigation_shape_in_array
-            ll = model.low_loss(model.axes_manager)
-            length = max(sig.shape[-1], ll.shape[-1]) - \
-                min(sig.shape[-1], ll.shape[-1]) + 1
-            convolved = np.zeros(nav_shape + (length,)).T
-            convolved[:] = np.convolve(sig, ll, mode="valid")
-            convolved = convolved.T
-        else:
-            nav_shape = model.axes_manager._navigation_shape_in_array
-            ll = model.low_loss.data
-            length = max(sig.shape[-1], ll.shape[-1]) - \
-                min(sig.shape[-1], ll.shape[-1]) + 1
-            convolved = np.zeros(nav_shape + (length,))
-            for index in np.ndindex(nav_shape):
-                convolved[index] = np.convolve(
-                    sig[index], ll[index], mode="valid")
-        return convolved
