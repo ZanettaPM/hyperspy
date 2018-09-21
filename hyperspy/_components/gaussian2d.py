@@ -69,20 +69,12 @@ class Gaussian2D(Component):
 
 # TODO: add boundaries and gradients for enhancement
 
-    def function(self, x, y, multi=False):
-        if multi:
-            A = self.A.map['values'][...,None,None]
-            sx = self.sigma_x.map['values'][...,None,None]
-            sy = self.sigma_y.map['values'][...,None,None]
-            x0 = self.centre_x.map['values'][...,None,None]
-            y0 = self.centre_y.map['values'][...,None,None]
-        
-        else:
-            A = self.A.value
-            sx = self.sigma_x.value
-            sy = self.sigma_y.value
-            x0 = self.centre_x.value
-            y0 = self.centre_y.value
+    def function(self, x, y):
+        A = self.A.value
+        sx = self.sigma_x.value
+        sy = self.sigma_y.value
+        x0 = self.centre_x.value
+        y0 = self.centre_y.value
 
         return A * (1 / (sx * sy * pi2)) * np.exp(-((x - x0) ** 2
                                                     / (2 * sx ** 2)

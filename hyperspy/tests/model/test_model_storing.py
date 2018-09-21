@@ -42,7 +42,7 @@ class TestModelStoring:
         s = Signal1D(range(100))
         m = s.create_model()
         m.append(Gaussian())
-        m.fit(fitter='leastsq')
+        m.fit()
         self.m = m
 
     def test_models_getattr(self):

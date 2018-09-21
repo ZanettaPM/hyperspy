@@ -17,6 +17,7 @@
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import math
 import logging
 
 import numpy as np
@@ -280,116 +281,59 @@ class EELSCLEdge(Component):
 
     def _integrate_GOS(self):
         # Integration over q using splines
-        try:
-            multi = self.model._compute_comp_all_pixels
-        except:
-            multi = False
-        if multi:
-            angles = self.effective_angle.map['values'] * 1e-3  # in rad
-            self.tab_xsection = self.GOS.integrateq(
-                self.onset_energy.map['values'], angles,
-                self.E0, self.model, multi)
-            E1 = self.GOS.energy_axis[-2] + self.GOS.energy_shift
-            E2 = self.GOS.energy_axis[-1] + self.GOS.energy_shift
-            y1 = self.GOS.qint[..., -2]  # in m**2/bin */
-            y2 = self.GOS.qint[..., -1]  # in m**2/bin */
-            self.r = np.log(y2 / y1) / np.log(E1 / E2)
-            self.A = y1 / E1 ** -self.r
-        else:
-            angle = self.effective_angle.value * 1e-3  # in rad
-            self.tab_xsection = self.GOS.integrateq(
-                self.onset_energy.value, angle, self.E0)
-            # Calculate extrapolation powerlaw extrapolation parameters
-            E1 = self.GOS.energy_axis[-2] + self.GOS.energy_shift
-            E2 = self.GOS.energy_axis[-1] + self.GOS.energy_shift
-            y1 = self.GOS.qint[-2]  # in m**2/bin */
-            y2 = self.GOS.qint[-1]  # in m**2/bin */
-            self.r = np.log(y2 / y1) / np.log(E1 / E2)
-            self.A = y1 / E1 ** -self.r
+        angle = self.effective_angle.value * 1e-3  # in rad
+        self.tab_xsection = self.GOS.integrateq(
+            self.onset_energy.value, angle, self.E0)
+        # Calculate extrapolation powerlaw extrapolation parameters
+        E1 = self.GOS.energy_axis[-2] + self.GOS.energy_shift
+        E2 = self.GOS.energy_axis[-1] + self.GOS.energy_shift
+        y1 = self.GOS.qint[-2]  # in m**2/bin */
+        y2 = self.GOS.qint[-1]  # in m**2/bin */
+        self.r = math.log(y2 / y1) / math.log(E1 / E2)
+        self.A = y1 / E1 ** -self.r
 
     def _calculate_knots(self):
-        if self.model._is_multifit:
-            start = self.onset_energy.map['values']
-        else:
-            start = self.onset_energy.value
+        start = self.onset_energy.value
         stop = start + self.fine_structure_width
+        self.__knots = np.r_[
+            [start] * 4,
+            np.linspace(
+                start,
+                stop,
+                self.fine_structure_coeff._number_of_elements)[
+                2:-2],
+            [stop] * 4]
 
-        if self.model._is_multifit:
-            nav_shape = self.model.axes_manager._navigation_shape_in_array
-            self.__knots = np.zeros(
-                nav_shape + (self.fine_structure_coeff._number_of_elements))
-            for index in np.ndindex(nav_shape):
-                self.__knots[index] = np.r_[[start[index]] * 4, np.linspace(start[index], stop[index],
-                                                                            self.fine_structure_coeff._number_of_elements)[2:-2], [stop[index]] * 4]
-        else:
-            self.__knots = np.r_[[start] * 4, np.linspace(start, stop,
-                                                          self.fine_structure_coeff._number_of_elements)[2:-2], [stop] * 4]
-
-    def function(self, E, multi=False):
+    def function(self, E):
         """Returns the number of counts in barns
 
         """
-        if multi:
-            nav_shape = self.intensity.map['values'].shape
-            intensity = self.intensity.map['values'][..., None]
-            onset_energy = self.onset_energy.map['values'][..., None]
-            fine_structure_coeff = self.fine_structure_coeff.map['values'][..., None]
-            effective_angle = self.effective_angle.map['values'][..., None]
-        else:
-            nav_shape = ()
-            intensity = self.intensity.value
-            onset_energy = self.onset_energy.value
-            fine_structure_coeff = self.fine_structure_coeff.value
-            effective_angle = self.effective_angle.value
-
-        shift = onset_energy - self.GOS.onset_energy
-        # Because hspy Events are not executed in any given order,
-        # an external function could be in the same event execution list
-        # as _integrate_GOS and be executed first. That can potentially
-        # cause an error that enforcing _integrate_GOS here prevents. Note
-        # that this is suboptimal because _integrate_GOS is computed twice
-        # unnecessarily.
-
-        if multi:
-            # if (shift != self.GOS.energy_shift).all():
+        shift = self.onset_energy.value - self.GOS.onset_energy
+        if shift != self.GOS.energy_shift:
+            # Because hspy Events are not executed in any given order,
+            # an external function could be in the same event execution list
+            # as _integrate_GOS and be executed first. That can potentially
+            # cause an error that enforcing _integrate_GOS here prevents. Note
+            # that this is suboptimal because _integrate_GOS is computed twice
+            # unnecessarily.
             self._integrate_GOS()
-            Emax = (self.GOS.energy_axis[-1] +
-                    self.GOS.energy_shift)[..., None]
-        else:
-            # if shift != self.GOS.energy_shift:
-            self._integrate_GOS()
-            Emax = self.GOS.energy_axis[-1] + self.GOS.energy_shift
-        cts = np.zeros(nav_shape + (len(E),))
-        bsignal = (E >= onset_energy)
+        Emax = self.GOS.energy_axis[-1] + self.GOS.energy_shift
+        cts = np.zeros((len(E)))
+        bsignal = (E >= self.onset_energy.value)
         if self.fine_structure_active is True:
             bfs = bsignal * (
-                E < (onset_energy + self.fine_structure_width))
-            cts[..., bfs] = splev(
-                E[..., bfs], (
+                E < (self.onset_energy.value + self.fine_structure_width))
+            cts[bfs] = splev(
+                E[bfs], (
                     self.__knots,
-                    fine_structure_coeff + (0,) * 4, 3))
+                    self.fine_structure_coeff.value + (0,) * 4,
+                    3))
             bsignal[bfs] = False
         itab = bsignal * (E <= Emax)
-        self.cts = cts
-        self.itab = itab
-        self.E = E
-        if multi:
-            nav_shape = self.model.axes_manager._navigation_shape_in_array
-            for index in np.ndindex(nav_shape):
-                # print(cts.shape)
-                # print(itab.shape)
-                # print(E.shape)
-                # print(E[itab[index]].shape)
-                cts[index][itab[index]] = self.tab_xsection[index](
-                    E[itab[index]])
-                cts[index][bsignal[index]] = self.A[index] * \
-                    E[bsignal[index]] ** -self.r[index]
-        else:
-            cts[itab] = self.tab_xsection(E[itab])
-            cts[bsignal] = self.A * E[bsignal] ** -self.r
+        cts[itab] = self.tab_xsection(E[itab])
         bsignal[itab] = False
-
-        return cts * intensity
+        cts[bsignal] = self.A * E[bsignal] ** -self.r
+        return cts * self.intensity.value
 
     def grad_intensity(self, E):
         return self.function(E) / self.intensity.value

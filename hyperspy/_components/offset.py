@@ -51,12 +51,10 @@ class Offset(Component):
         # Linearity
         self.offset._is_linear = True
 
-    def function(self, x, multi=False):
-        if multi:
-            o = self.offset.map['values'][...,None]
-        else:
-            o = self.offset.value
-        return np.ones((len(x))) * o
+        self._constant_parameters = [self.offset]
+
+    def function(self, x):
+        return np.ones((len(x))) * self.offset.value
 
     @staticmethod
     def grad_offset(x):
@@ -106,13 +104,11 @@ class Offset(Component):
             self.fetch_stored_values()
             return True
 
-    def get_constant_term(self, multi=False):
+    @property
+    def constant_term(self):
         "Get value of constant term of component"
         # First get currently constant parameters
         if self.offset.free:
             return 0
         else:
-            if multi:
-                return self.offset.map['values']
-            else:
-                return self.offset.value
+            return self.offset.value

@@ -65,15 +65,10 @@ class Arctan(Component):
         # Linearity
         self.A._is_linear = True
 
-    def function(self, x, multi=False):
-        if multi:
-            A = self.A.map['values'][...,None]
-            k = self.k.map['values'][...,None]
-            x0 = self.x0.map['values'][...,None]
-        else:
-            A = self.A.value
-            k = self.k.value
-            x0 = self.x0.value
+    def function(self, x):
+        A = self.A.value
+        k = self.k.value
+        x0 = self.x0.value
         if self.minimum_at_zero:
             return A * (math.pi / 2 + np.arctan(k * (x - x0)))
         else:
@@ -83,7 +78,7 @@ class Arctan(Component):
         k = self.k.value
         x0 = self.x0.value
         if self.minimum_at_zero:
-            return math.pi / 2 + np.arctan(k * (x - x0))
+            return offset + np.arctan(k * (x - x0))
         else:
             return np.arctan(k * (x - x0))
 

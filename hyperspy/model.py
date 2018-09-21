@@ -28,6 +28,7 @@ import scipy
 import scipy.odr as odr
 from scipy.optimize import (leastsq, least_squares,
                             minimize, differential_evolution)
+from scipy.optimize import lsq_linear as linear
 from scipy.linalg import svd
 from contextlib import contextmanager
 
@@ -44,8 +45,6 @@ from hyperspy.misc.export_dictionary import (export_to_dictionary,
 from hyperspy.misc.utils import (slugify, shorten_name, stash_active_state,
                                  dummy_context_manager)
 from hyperspy.misc.slicing import copy_slice_from_whitelist
-from hyperspy.misc.model_tools import (linear_regression, get_top_parent_twin,
-                                       standard_error_from_covariance)
 from hyperspy.events import Events, Event, EventSuppressor
 import warnings
 from hyperspy.exceptions import VisibleDeprecationWarning
@@ -218,7 +217,6 @@ class BaseModel(list):
             obj : Model
                 The Model that the event belongs to
             """, arguments=['obj'])
-        self._is_multifit = False
 
     def __hash__(self):
         # This is needed to simulate a hashable object so that PySide does not
@@ -842,7 +840,7 @@ class BaseModel(list):
         return to_return
 
     def _check_all_active_components_are_linear(self):
-        "Loops through active components checking all parameters are linear"
+        """Loops through active components checking all parameters are linear"""
         for comp in self:
             if comp.active:
                 for parameter in comp.parameters:
@@ -851,363 +849,210 @@ class BaseModel(list):
                             return False
         return True
 
-    def _get_nonlinear_parameters(self):
-        "Returning list of all active nonlinear components"
+    def _get_nonlinear_components(self):
+        """Returning list of all active nonlinear components"""
         nonlinear = []
         for comp in self:
             if comp.active:
                 for parameter in comp.parameters:
                     if parameter.free:
                         if not parameter._is_linear:
-                            nonlinear.append(parameter)  # component is not linear
+                            nonlinear.append(comp)  # component is not linear
                             break
         return nonlinear
 
     def _check_and_set_linear_parameters_not_zero(self):
-        '''Set linear parameters value to be 1 if 0.
-        Raise warning about parameters that are fixed but also = 0
-        '''
+        """Linear components will not scale correctly if they are currently
+        set to zero"""
 
-        linpara = []
-        nonlinpara = []
+        warning = "Value of linear parameter {} of component {}" \
+            " was set to zero. Changed to value = 1 for fitting."
         for comp in self:
             if comp.active:
-                # Don't want warnings about inactive fine struc
-                # Could create an equivalent method in eelsmodel
-                # And remove the following fine struc block from model.py
-                try:
-                    fine_structure = comp.fine_structure_active
-                except:
-                    fine_structure = None
-                for parameter in comp.parameters:
-                    if parameter.name == "fine_structure_coeff":
-                        if fine_structure is False:
-                            continue
-                    if self._is_multifit:
-                        if (parameter.map['values'] == 0).any():
-                            if parameter.free:
-                                parameter.map['values'] = 1
-                                parameter.map['is_set'] = True
-                                linpara.append(parameter)
-                            else:
-                                nonlinpara.append(parameter)
-                    else:
-                        # sum takes into account para.value that are tuples
-                        if np.sum(parameter.value) == 0:
-                            if parameter.free:
-                                parameter._set_value(1)
-                                linpara.append(parameter)
-                            else:
-                                nonlinpara.append(parameter)
-        if linpara:
-            text = ["\t{}".format(p) for p in linpara]
-            text = "\n".join(text)
-            logging.info('The value of these parameters were changed'
-                         ' to be = 1 for linear fitting\n{}'.format(text))
-        if nonlinpara:
-            text = ["\t{}".format(p) for p in nonlinpara]
-            text = "\n".join(text)
-            val = 'para.values["map"]' if self._is_multifit else 'para.value'
-            logging.warning('The value of the following parameters is '
-                            'zero. \nIf this is correct, ignore this '
-                            'message, otherwise check '
-                            '{}\n{}'.format(val, text))
+                for parameter in comp.free_parameters:
+                    if parameter.value == 0:
+                        parameter._set_value(1)
+                        logging.warning(warning.format(
+                            parameter.name, comp.name))
 
-    def _check_if_ll_constant(self):
-        try:
-            self.low_loss
-            pass
-        except:
-            return True
-        ll = self.low_loss
-        if not ll:
-            return True
-        if not ll.axes_manager.navigation_size:
-            return True
-        n = len(ll.axes_manager.navigation_shape)
-        if (ll.data[n*(0,)] == ll.data).all():
-            return True
-        return False
-
-    def _check_if_value_map_uniform(self):
-        '''Check if all parameters value maps are uniform - i.e. if
-        a = para.map['values], satisfies (a == a[0]).all()
-        If so, set _uniform_comp_map_vals = True, else False.'''
-        _uniform_comp_map_vals = True
-        for comp in self:
-            if comp.active and comp.free_parameters:
-                for para in comp.parameters:
-                    if not (
-                        para.map['values'].flat[0] == para.map['values']
-                    ).all():
-                        _uniform_comp_map_vals = False
-                        break
-        return _uniform_comp_map_vals
-
-    def p0_index_from_component(self, component):
-        'Get p0 index for components that have only one free parameter'
-        return self.free_parameters.index(component.free_parameters[0])
-
-    def p0_index_from_parameter(self, parameter):
-        'For components that have multiple free parameters'
-        return self.free_parameters.index(parameter)
-
-    def _assign_twin_value_maps(self):
-        'Set the correct values map for the twinned parameters'
-        for para in self.twinned_parameters:
-            if self._compute_comp_all_pixels:
-                para.map['values'] = para.twin_function(
-                    para.twin.map['values']) if para.twin_function \
-                    else para.twin.map['values']
-            else:
-                # Superfluous as it should be set already, but it's cheap
-                para.value = para.twin_function(
-                    para.twin.value) if para.twin_function else para.twin.value
-
-    def _set_twinned_lists(self):
-        'Create lists of twinned components and their parents'
-        self.twinned_components_parents = []
-        self.twinned_parameters_parents = []
-        self.twinned_components = []
-        self.twinned_parameters = []
-        for comp in self:
-            for para in comp.parameters:
-                if para.twin and para._is_linear:
-                    self.twinned_components.append(comp)
-                    self.twinned_parameters.append(para)
-                    parent = get_top_parent_twin(para)
-                    self.twinned_parameters_parents.append(parent)
-                    self.twinned_components_parents.append(parent.component)
-
-    def _append_component(self, component):
-        '''The following code works for a component where ax+b/x+c can be
-        multiple pseudo components, not only one'''
-        multi = self._compute_comp_all_pixels
-        if component in self.twinned_components:
-            # These twinned components have a linear parameter that is twinned
-            i = self.twinned_components.index(component)
-            parent_twin = self.twinned_components_parents[i]
-            if parent_twin.free_parameters:
-                index = self.p0_index_from_component(
-                    self.twinned_components_parents[i])
-            # Need to multiply comp and const by the twin_function - if there is one!
-            # Might be enough just to use the twin_function of the linear parameter directly!
-            if parent_twin.free_parameters:
-                # If parent component is not free, there is nothing to compute here.
-                COMP = component._compute_component(multi=multi)
-                if self.twinned_parameters[i].twin_function and multi:
-                    COMP = self.twinned_parameters[i].twin_function(COMP)
-            else:
-                COMP = 0
-            CONST = component._compute_constant_term(multi=multi)            
-            if self.twinned_parameters[i].twin_function:
-                # TODO: Check whether "and multi" should be included in if above
-                CONST = self.twinned_parameters[i].twin_function(CONST)                 
-            if parent_twin.free_parameters:
-                if multi:
-                    self.comp_data[..., index, :] += COMP - CONST
-                else:
-                    self.comp_data[index, :] += COMP - CONST
-            self.fixed_comp_data[:] += CONST
-
-        elif component.free_parameters:
-            # linear component to fit, with constant part
-            # Constant part of just linear components
-            index = self.p0_index_from_component(component)
-            if len(component.free_parameters) == 1:
-                COMP = component._compute_component(multi=multi)
-                CONST = component._compute_constant_term(multi=multi)
-                if multi:
-                    self.comp_data[..., index, :] += COMP - CONST
-                else:
-                    self.comp_data[index, :] += COMP - CONST
-                self.fixed_comp_data[:] += CONST
-            else:
-                # Check that this component is based on Expression
-                assert component._str_expression, \
-                    "Component {} has more than one free parameter, " \
-                    "which is only supported for Expression type " \
-                    "components."
-                free, fixed = component._separate_pseudocomponents()
-                for free_parameter in component.free_parameters:
-                    index = self.p0_index_from_parameter(free_parameter)
-                    self.comp_data[..., index, :] += component._compute_expression_part(
-                        free[free_parameter.name], multi=multi)
-                self.fixed_comp_data[:] += component._compute_expression_part(fixed,
-                                                                              multi=multi)
-        else:
-            # No free parameters, so component is a fixed.
-            # Entire value of fixed components
-            self.fixed_comp_data[:] += component._compute_component(
-                multi=multi)
-    def _remove_any_zero_components(self):
-        '''Remove any zero-components from the comp_data
-        
-        If any component.function comes out as zero in the signal_range being fitted,
-        it should not be attempted fitted to the region. This method removes it from the array,
-        and skips the coefficient multiplication later on for that parameter.
-        '''
-        axis = self.axes_manager.navigation_dimension if self._compute_comp_all_pixels else 0
-        if self._compute_comp_all_pixels:
-            self._zero_comp_indices = np.where(np.any(np.invert(self.comp_data.any(axis=axis+1)), axis=self.axes_manager.navigation_indices_in_array))[0]
-        else:
-            self._zero_comp_indices = np.where(np.invert(self.comp_data.any(axis=1)))[0]
-        self.comp_data = np.delete(self.comp_data, self._zero_comp_indices, axis=axis)
-        if self._is_multifit:
-            self.coefficient_array = np.delete(self.coefficient_array, self._zero_comp_indices, axis=self.axes_manager.navigation_dimension)
-        else:
-            self.coefficient_array = np.delete(self.coefficient_array, self._zero_comp_indices, axis=0)
-
-
-    def calculate_covariance_matrix(self):
-        '''Calculate covariance matrix after having performed Linear Regression
-        Parameters:
-        fit: The resultant fit after performing fitting, same shape as b
-        A: Matrix containing the result of computing each free component
-        b: The raw data fitted to after fixed-component subtraction
-        '''
-        n = np.count_nonzero(self.channel_switches)  # the signal axis length
-        k = self.comp_data.shape[-2]  # the number of components
-        if self._is_multifit:
-            nav_shape = self.axes_manager._navigation_shape_in_array
-        else:
-            nav_shape = ()
-
-        fit = np.zeros(nav_shape + (n, k))
-        # Either comp_data is the same across all nav, or not.
-        if self._uniform_comp_map_vals:
-            for index in np.ndindex(nav_shape):
-                fit[index] = (self.comp_data.T * self.coefficient_array[index])
-        else:
-            for index in np.ndindex(nav_shape):
-                fit[index] = (self.comp_data[index].T *
-                              self.coefficient_array[index])
-        res = self.y - fit.sum(-1)  # The residual
-        res_dot = np.zeros(nav_shape)
-        for index in np.ndindex(nav_shape):
-            res_dot[index] = np.dot(res[index].T, res[index])
-
-        fit_dot = np.matmul(fit.swapaxes(-2, -1), fit)
-        inv_fit_dot = np.linalg.inv(fit_dot)
-        covariance = np.zeros(nav_shape + (k, k))
-        for index in np.ndindex(nav_shape):
-            covariance[index] = (1 / (n - k)) * \
-                np.dot(res_dot[index], inv_fit_dot[index])
-        return covariance
-
-    def _linear_fitting(self, multifit=False):
-        'Parent method for fitting using multivariate linear regression'
-        nonlinear = self._get_nonlinear_parameters()
-        not_linear_error = "Not all free parameters are linear. " \
-            "Fit with a " \
-            "different fitter or set non-linear " \
-            "`parameters.free = False`. These " \
-            "parameters are nonlinear:"
+    def _linear_fitting(self, bounded):
+        nonlinear = self._get_nonlinear_components()
+        not_linear_error = "Not all components are linear. Fit with a " \
+                    "different fitter or set non-linear " \
+                    "`parameters.free = False`. These " \
+                    "components are nonlinear:"
         if nonlinear:
             raise AttributeError(not_linear_error + str(nonlinear))
 
-        self._is_multifit = multifit
-        self._constant_ll = self._check_if_ll_constant()
-
         self._check_and_set_linear_parameters_not_zero()
         self._set_p0()
-        if self._is_multifit:
-            self._uniform_comp_map_vals = self._check_if_value_map_uniform() \
-                and self._constant_ll
-
-            # Then we only need to calculate the component data array once
-        else:
-            self._uniform_comp_map_vals = False
-        # Set whether components are not equal across the nav space
-        self._compute_comp_all_pixels = self._is_multifit and \
-            not self._uniform_comp_map_vals
-        n_free_para = len(self.free_parameters)
-        assert n_free_para > 0, \
+        number_of_free_parameters = len(self.p0)
+        assert number_of_free_parameters > 0, \
             'Model does not contain any free components!'
-        channels_signal_shape = np.count_nonzero(self.channel_switches)
-        arr_nav_shape = self.axes_manager._navigation_shape_in_array
-        nav_shape = arr_nav_shape if self._is_multifit else ()
-        comp_nav_shape = () if self._uniform_comp_map_vals else nav_shape
+        # TODO: Need a better way of calculating the shape than this... 
+        axes = [ax.axis for ax in self.axes_manager.signal_axes]
+        mesh = np.meshgrid(*axes)
+        mesh = [me[np.where(self.channel_switches)] for me in mesh]
+        channels_signal_shape = mesh[0].shape
+        #channels_signal_shape = tuple((np.prod(self.channel_switches.shape),))
+        
+        comp_data = np.zeros((number_of_free_parameters,) + channels_signal_shape)
+        comp_data_constant_values = np.zeros(
+            (number_of_free_parameters,) + channels_signal_shape)
+        fixed_comp_data = np.zeros(channels_signal_shape)
 
-        self.comp_data = np.zeros(
-            comp_nav_shape + (n_free_para, channels_signal_shape)
-        )
-        self.comp_data_constant_values = self.comp_data.copy()
-        self.fixed_comp_data = np.zeros(
-            comp_nav_shape + (channels_signal_shape, ))
+        def p0_index_from_component(component):
+            return self.free_parameters.index(component.free_parameters[0])
 
-        self.coefficient_array = np.zeros(
-            nav_shape + (n_free_para,))
-        self._set_twinned_lists()
-        self._assign_twin_value_maps()
+        def p0_index_from_parameter(parameter):
+            return self.free_parameters.index(parameter)
+
+        def _append_component(component):
+            '''The following code works for a model where ax+b/x+c can be
+            multiple components, not only one'''
+            if component.free_parameters:
+                # linear component to fit, with constant part
+                # Constant part of just linear components
+                index = p0_index_from_component(component)
+                if len(component.free_parameters) < 2:
+                    COMP = component._compute_component()
+                    CONST = component._compute_constant_term()
+                    comp_data[index] += COMP - CONST
+                        
+                else:
+                    # Check that this component is based on Expression
+                    assert component._str_expression, \
+                        "Component {} has more than one free parameter, " \
+                        "which is only supported for Expression type " \
+                        "components."
+                    free, fixed = component._separate_fixed_and_free_expression_elements()
+                    for free_parameter in component.free_parameters:
+                        index = p0_index_from_parameter(free_parameter)
+                        comp_data[index] += component._compute_expression_part(
+                            free[free_parameter.name])
+                    fixed_comp_data[:] += component._compute_expression_part(
+                        fixed)
+            else:
+                # No free parameters, so component is a fixed.
+                # Entire value of fixed components
+                print(fixed_comp_data.shape)
+                print(component._compute_component().shape)
+                fixed_comp_data[:] += component._compute_component()
+
+        def get_parent_twin(parameter):
+            if parameter.twin:
+                return get_parent_twin(parameter.twin)
+            else:
+                return parameter
+
+        def add_twins(parent_comp):
+            'Accounts for situation where twins have been chained'
+            indices = [i for i, x in enumerate(
+                twinned_components_parents) if x == parent_comp]
+            if parent_comp.free_parameters:  # Parent component not fixed
+                for twin in np.array(twinned_components)[indices]:
+                    parent_parameter = get_parent_twin(
+                        twinned_parameters[twinned_components.index(twin)])
+                    index = p0_index_from_parameter(parent_parameter)
+                    if len(component.free_parameters) < 2:
+                        comp_data[index] += twin._compute_component()
+            else:  # Parent component is fixed, so all children are fixed too
+                for twin in np.array(twinned_components)[indices]:
+                    fixed_comp_data[:] += twin._compute_component()
+
+        def append_component(component):
+            'Separate free and constant data for fitting'
+            if component not in twinned_components:
+                _append_component(component)
+                if component in twinned_components_parents:
+                    add_twins(component)
+
+        def top_parent_twin(parameter):
+            if parameter.twin.twin:
+                return top_parent_twin(parameter.twin)
+            else:
+                return parameter.twin
+
+        def calculate_covariance_matrix(A, b):
+            '''Calculate covariance matrix after performing Linear Regression
+
+            Parameters:
+            fit: The resultant fit after performing fitting, same shape as b
+            A: The component matrix fitted against
+            b: The raw data fitted to
+
+            '''
+            n = b.shape[0]
+            k = A.shape[-1]
+            residual = b - (self._fit_coefficients * A).sum(-1)
+
+            residual_dot = np.dot(residual.T, residual)
+            component_dot = np.dot(A.T, A)
+            inverse_component_dot = np.linalg.inv(component_dot)
+
+            covariance = (1 / (n - k)) * np.dot(residual_dot,
+                                                inverse_component_dot)
+            return covariance
+
+        def standard_error_from_covariance(covariance):
+            standard_error = np.sqrt(np.diagonal(covariance))
+            return standard_error
+
+        # Create a list of twinned components and their parents
+        twinned_components_parents = []
+        twinned_parameters_parents = []
+        twinned_components = []
+        twinned_parameters = []
+        for comp in self:
+            for para in comp.parameters:
+                if para.twin and para._is_linear:
+                    twinned_components.append(comp)
+                    twinned_parameters.append(para)
+                    parent = top_parent_twin(para)
+                    twinned_parameters_parents.append(parent)
+                    twinned_components_parents.append(parent.component)
+        self.twinned_components_parents = twinned_components_parents
+        self.twinned_components = twinned_components
+
         for component in self:
-            if component.active:
-                self._append_component(component)
+            if component.active and component not in twinned_components:
+                append_component(component)
 
-        # The linear components
-        self.comp_data = self.comp_data - self.comp_data_constant_values
-        self._remove_any_zero_components()
-
-        if self._is_multifit:
-            y = self.signal.data.T[np.where(self.channel_switches.T)].T
-        else:
-            y = self.signal()[np.where(self.channel_switches)]
+        comp_data = comp_data - comp_data_constant_values  # the linear data
+        self.comp_data_constant_values = comp_data_constant_values
+        y = self.signal()[np.where(self.channel_switches)]
 
         if self.signal.metadata.Signal.binned is True:
             y = y / self.signal.axes_manager[-1].scale
 
-        y = y - self.fixed_comp_data  # - model_constant_term
+        y = y - fixed_comp_data  # - model_constant_term
 
-        comp_data_shape = self.comp_data.shape
-        sig1Dshape = np.count_nonzero(self.channel_switches)
+        comp_data_shape = comp_data.shape
+        y = y.flatten()
+        comp_data = comp_data.reshape((comp_data_shape[0],) +  y.shape)
 
-        # Reshape what may potentially be Signal2D data into a long Signal1D shape
-        y = y.reshape(nav_shape + (sig1Dshape,))
-        self.y = y
+        if bounded:
+            self.set_boundaries()
+            bounds = self.free_parameters_boundaries
+            # Must scale bounds by current value as bounds refer to
+            # scaling factor
+            new_bounds = ([bmin / value if bmin is not None else -np.inf
+                           for (bmin, bmax), value in zip(bounds, self.p0)],
+                          [bmax / value if bmax is not None else np.inf
+                           for (bmin, bmax), value in zip(bounds, self.p0)])
 
-        if self._is_multifit:
-            if self._uniform_comp_map_vals:
-                self.coefficient_array[:] = linear_regression(
-                    y, self.comp_data)
-            else:
-                for index in np.ndindex(nav_shape):
-                    self.coefficient_array[index] = linear_regression(
-                        y[index], self.comp_data[index])
-            covariance = self.calculate_covariance_matrix()
-            standard_error = standard_error_from_covariance(covariance)
-            j = 0 # counter to skip any zero-components
-            for i, para in enumerate(self.free_parameters):
-                if i in self._zero_comp_indices:
-                    j += 1
-                    pass
-                else:
-                    para.map['values'] = para.map['values'] * \
-                        self.coefficient_array[..., i-j]
-                    para.map['std'] = np.abs(
-                        para.map['values']*standard_error[..., i-j])
-                    para.map['is_set'] = True
+            output = linear(comp_data.T, y, bounds=new_bounds)
         else:
-            self.coefficient_array[:] = linear_regression(y, self.comp_data)
-            covariance = self.calculate_covariance_matrix()
-            standard_error = standard_error_from_covariance(covariance)
-            oldp0 = self.p0
-            self.p0 = ()
-            self.p_std = ()
-            j = 0
-            for i, p in enumerate(oldp0):
-                if i in self._zero_comp_indices:
-                    self.p0 += (0,)
-                    self.p_std += (np.nan,)
-                    j += 1
-                else:
-                    p0 = p * self.coefficient_array[i-j]
-                    self.p0 += (p0,)
-                    self.p_std += (p0*standard_error[i-j],) 
-            self.store_current_values()
-            # reshape back from potentially Signal2D data
-            self.comp_data = self.comp_data.reshape(comp_data_shape)
-        self.fetch_stored_values()
-        self._compute_comp_all_pixels = False
+            output = linear(comp_data.T, y)
+            
+        self.comp_data = comp_data.reshape(comp_data_shape)
+        self.fit_output = output
+        self._fit_coefficients = output["x"]
+        self.p0 = tuple(
+            [oldp0 * fit_coefficient for oldp0,
+             fit_coefficient in zip(self.p0, self._fit_coefficients)])
+        covariance = calculate_covariance_matrix(comp_data.T, y)
+        self.p_std = self.p0 * standard_error_from_covariance(covariance)
 
     def _errfunc2(self, param, y, weights=None):
         if weights is None:
@@ -1272,7 +1117,7 @@ class BaseModel(list):
             The optimization algorithm used to perform the fitting. The default
             is "leastsq" when there are free non-linear parameters and "linear"
             when the free parameters are all linear.
-
+                
                 "leastsq" performs least-squares optimization, and supports
                 bounds on parameters.
 
@@ -1627,17 +1472,6 @@ class BaseModel(list):
         fit
 
         """
-        # try:
-        if "fitter" in kwargs.keys():
-            fitter = kwargs['fitter']
-        else:
-            fitter = None
-        if fitter == 'linear':
-            self._linear_fitting(multifit=True)
-            return
-        # except:
-        #    pass
-
         if show_progressbar is None:
             show_progressbar = preferences.General.show_progressbar
 
