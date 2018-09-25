@@ -211,14 +211,14 @@ class Physical_background(Component):
 	This dictionnary is call in the function Wpercent() to calculate an array of weight percent with the same dimension than the model and a length which correspond to the number of elements filled in the metadata
     """
 
-    def __init__(self, E0, detector, quantification, absorption_model,TOA ,coating_thickness=1, coefficients=1, Window=1, quanti=1, MuC=1):
+    def __init__(self, E0, detector, quantification, absorption_model ,coating_thickness=1, coefficients=1, Window=1, quanti=1, MuC=1):
         Component.__init__(self,['coefficients','E0','Window','MuC','quanti','teta','coating_thickness'])
 
         self.coefficients._number_of_elements = 2
         self.coefficients.value = np.ones(2)
         
         self.E0.value=E0
-        self.teta.value=TOA
+        #self.teta.value=TOA
         self.coating_thickness.value=coating_thickness
         
         self._whitelist['quanti'] = quantification
@@ -233,7 +233,7 @@ class Physical_background(Component):
         self.coefficients.free=True
         self.Window.free=False
         self.MuC.free=False
-        self.teta.free=False
+        #self.teta.free=False
         self.coating_thickness.free=False
         self.quanti.free=False
         
@@ -273,7 +273,7 @@ class Physical_background(Component):
     
         
         E0=self.E0.value
-        teta=np.radians(self.teta.value)
+        #teta=np.radians(self.teta.value)
         Cthickness=self.coating_thickness.value
         
         Mu=Mucoef(self.model,self.quanti.value)
@@ -287,14 +287,14 @@ class Physical_background(Component):
 
         MuC=np.array(self.MuC.value,dtype=float)
         MuC=MuC[self.model.channel_switches]
-        cosec=(1/np.sin(teta))
+        #cosec=(1/np.sin(teta))
 	
         emission=(a*((E0-x)/x)) #kramer's law
-        absorption=((1-np.exp(-2*Mu*b*10**-5*cosec))/((2*Mu*b*10**-5*cosec))) #love and scott model. 
-        METabsorption=(np.exp(-Mu*b*10**-5*cosec)) #CL model
+        absorption=((1-np.exp(-2*Mu*b*10**-5))/((2*Mu*b*10**-5))) #love and scott model. 
+        METabsorption=(np.exp(-Mu*b*10**-5)) #CL model
 
         if self.coating_thickness.value>0:
-            coating=(np.exp(-MuC*1.3*Cthickness*10**-7*cosec))# absorption by the coating layer (1.3 is the density)
+            coating=(np.exp(-MuC*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
         else:
             coating=1
 	
