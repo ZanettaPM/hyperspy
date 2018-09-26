@@ -19,6 +19,7 @@
 import numpy as np
 from hyperspy.component import Component
 from hyperspy.misc.material import _mass_absorption_mixture as mass_absorption_mixture
+from hyperspy.misc.material import mass_absorption_coefficient as mass_absorption_coefficient
 from hyperspy.misc import elements as element_db
 from hyperspy.external.mpfit import mpfit
 from hyperspy.misc.material import atomic_to_weight
@@ -157,8 +158,7 @@ def Cabsorption(model): # this function calculate the absorption coefficient for
     """	
 
     t=(np.linspace(model._signal.axes_manager[-1].offset,model._signal.axes_manager[-1].size*model._signal.axes_manager[-1].scale,model._signal.axes_manager[-1].size))
-    
-    Acc=mass_absorption_mixture(elements='C' ,weight_percent=[100], energies=t)    
+    Acc=mass_absorption_coefficient(element='C' , energies=t)    
     #b=(model._signal.axes_manager.signal_axes[-1].axis)
     #Acc=np.interp(b,t,Acc) # Interpolation allows to gain some time
     
@@ -185,12 +185,14 @@ def Windowabsorption(model,detector):
         x =a[:,0]
         y = a[:,1]
         Accc=np.interp(b, x, y)
+        
     else :
         a=detector
         b=(model._signal.axes_manager.signal_axes[-1].axis)-0.04
         x =a[:,0]
         y = a[:,1]
         Accc=np.interp(b, x, y)
+        
     return Accc
         
 class Physical_background(Component):
@@ -255,21 +257,20 @@ class Physical_background(Component):
             self.quanti.map['values'][:] = Wpercent(self.model,E0,self._whitelist['quanti'])
             self.quanti.map['is_set'][:] = True
         
-        self.Window._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-        self.Window._create_array()
-        self.Window.value=Windowabsorption(self.model,self._whitelist['detector'])
-
-        self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-        self.MuC._create_array()
-        self.MuC.value=Cabsorption(self.model)
-        
+##        self.Window._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
+##        self.Window.value=Windowabsorption(self.model,self._whitelist['detector'])
+##        self.Window._create_array()
+##
+##        self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
+##        self.MuC.value=Cabsorption(self.model)
+##        self.MuC._create_array()
+##        
         return {'Quant map has been created'}
         
     def function(self,x):
  
         b=self.coefficients.value[0]
         a=self.coefficients.value[1]
-    
         
         E0=self.E0.value
         teta=np.radians(self.teta.value)
@@ -278,13 +279,13 @@ class Physical_background(Component):
         Mu=Mucoef(self.model,self.quanti.value)
         Mu=np.array(Mu,dtype=float)
         #Mu=Mu[self.model.channel_switches]
-
         
-        
-        Window=np.array(self.Window.value,dtype=float)
+        Window=Windowabsorption(self.model,self._whitelist['detector'])
+        Window=np.array(Window,dtype=float)
         Window=Window[self.model.channel_switches]
 
-        MuC=np.array(self.MuC.value,dtype=float)
+        MuC=Cabsorption(self.model)
+        MuC=np.array(MuC,dtype=float)
         MuC=MuC[self.model.channel_switches]
         cosec=(1/np.sin(teta))
 	
