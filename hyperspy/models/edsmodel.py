@@ -348,7 +348,7 @@ class EDSModel(Model1D):
         if E0 == 'from_metadata':
             E0 = self.signal._get_beam_energy()
         if TOA == 'from_metadata':
-            TOA = self.signal.get_take_off_angle()
+            TOA = 0.01#self.signal.get_take_off_angle()
             
         background = create_component.Physical_background(E0=E0,detector=detector, quantification=quantification, absorption_model=absorption_model, coating_thickness=coating_thickness,TOA=TOA)
         background.name = "Bremsstrahlung"
