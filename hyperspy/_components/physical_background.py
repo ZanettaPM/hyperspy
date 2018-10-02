@@ -124,7 +124,6 @@ def Wpercent(model,E0,quantification):
     return weight
 
 
-
 def Mucoef(model,quanti): # this function calculate the absorption coefficient for all energy. This, correspond to the Mu parameter in the function
     """
     Calculate the mass absorption coefficient for all energy of the model axis for each pixel. Need the weigth percent array defined by the Wpercent function
@@ -194,6 +193,7 @@ def Windowabsorption(model,detector):
         Accc=np.interp(b, x, y)
         
     return Accc
+
         
 class Physical_background(Component):
 
@@ -212,14 +212,17 @@ class Physical_background(Component):
 	This dictionnary is call in the function Wpercent() to calculate an array of weight percent with the same dimension than the model and a length which correspond to the number of elements filled in the metadata
     """
 
-    def __init__(self, E0, detector, quantification, absorption_model,TOA ,coating_thickness, coefficients=1, Window=0, quanti=0, MuC=0):
+    def __init__(self, E0, detector, quantification, absorption_model,TOA ,coating_thickness, coefficients=1, Window=0, quanti=1, MuC=0):
         Component.__init__(self,['coefficients','E0','Window','MuC','quanti','teta','coating_thickness'])
 
         self.coefficients._number_of_elements = 2
-        self.coefficients.value = np.ones(2)
+        self.coefficients.value = (1,1)
         
         self.E0.value=E0
         self.teta.value=TOA
+        self.teta.value=np.radians(self.teta.value)
+        self.teta.value=(1/np.sin(self.teta.value))
+        
         self.coating_thickness.value=coating_thickness
         
         self._whitelist['quanti'] = quantification
@@ -242,29 +245,36 @@ class Physical_background(Component):
 
         # Boundaries
         self.coefficients.bmin=0
-        self.coefficients.bmax=None
-
+        self.coefficients.bmax=1e6
+        
     def initialize(self): # this function is necessary to initialize the quant map
 
         E0=self.E0.value
+        Cthickness=self.coating_thickness.value
         
         self.quanti._number_of_elements=len(self.model._signal.metadata.Sample.elements)
         self.quanti._create_array()
-
+        
         if len(self.model.axes_manager.shape)==1:
             self.quanti.value=Wpercent(self.model,E0,self._whitelist['quanti'])
         else: 
             self.quanti.map['values'][:] = Wpercent(self.model,E0,self._whitelist['quanti'])
             self.quanti.map['is_set'][:] = True
+            self.quanti.value=self.quanti.map['values'][0,0,:]    
+
+        self.Window._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
+        self.Window.value=Windowabsorption(self.model,self._whitelist['detector'])
+        self.Window._create_array()# take too much memory...
         
-##        self.Window._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-##        self.Window.value=Windowabsorption(self.model,self._whitelist['detector'])
-##        self.Window._create_array()
-##
-##        self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-##        self.MuC.value=Cabsorption(self.model)
-##        self.MuC._create_array()
-##        
+        if self.coating_thickness.value>0:
+            self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
+            self.MuC.value=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
+            self.MuC._create_array()# take too much memory...
+        else:
+            #self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
+            self.MuC.value=1#np.ones(len(self.model._signal.axes_manager.signal_axes[-1].axis))
+            self.MuC._create_array()
+
         return {'Quant map has been created'}
         
     def function(self,x):
@@ -272,33 +282,45 @@ class Physical_background(Component):
         b=self.coefficients.value[0]
         a=self.coefficients.value[1]
         
+        
         E0=self.E0.value
-        teta=np.radians(self.teta.value)
-        Cthickness=self.coating_thickness.value
+        teta=self.teta.value
+        
         
         Mu=Mucoef(self.model,self.quanti.value)
         Mu=np.array(Mu,dtype=float)
-        #Mu=Mu[self.model.channel_switches]
         
-        Window=Windowabsorption(self.model,self._whitelist['detector'])
-        Window=np.array(Window,dtype=float)
+        #Window=Windowabsorption(self.model,self._whitelist['detector'])
+        Window=np.array(self.Window.value,dtype=float)
         Window=Window[self.model.channel_switches]
 
-        MuC=Cabsorption(self.model)
-        MuC=np.array(MuC,dtype=float)
-        MuC=MuC[self.model.channel_switches]
-        cosec=(1/np.sin(teta))
+        if self.MuC._number_of_elements==1 :
+            coating=1
+        else :
+            coating=np.array(self.MuC.value,dtype=float)
+            coating=coating[self.model.channel_switches]
+        
+        cosec=self.teta.value
 	
         emission=(a*((E0-x)/x)) #kramer's law
         absorption=((1-np.exp(-2*Mu*b*10**-5*cosec))/((2*Mu*b*10**-5*cosec))) #love and scott model. 
         METabsorption=(np.exp(-Mu*b*10**-5*cosec)) #CL model
 
-        if self.coating_thickness.value>0:
-            coating=(np.exp(-MuC*1.3*Cthickness*10**-7*cosec))# absorption by the coating layer (1.3 is the density)
-        else:
-            coating=1
-	
+        
         if self._whitelist['absorption_model'] is 'quadrilateral':
-            return np.where((x>0.17) & (x<(E0)),(emission*absorption*Window*coating),0) 
+            f=np.where((x>0.17) & (x<(E0)),(emission*absorption*Window*coating),0)
+            if not np.all(np.isfinite(f)): #avoid "residuals are not finite in the initial point"
+                self.coefficients.value=(0,0)
+                self.coefficients.store_current_value_in_array()
+                return 1
+            else:
+                return f
+        
         if self._whitelist['absorption_model'] is 'CL':
-            return np.where((x>0.17) & (x<(E0)),(emission*METabsorption*Window*coating),0)
+            f=np.where((x>0.17) & (x<(E0)),(emission*METabsorption*Window*coating),0)
+            if not np.all(np.isfinite(f)): #avoid "residuals are not finite in the initial point"
+                self.coefficients.value=(0,0)
+                self.coefficients.store_current_value_in_array()
+                return 1
+            else:
+                return f

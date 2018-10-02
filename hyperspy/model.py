@@ -936,8 +936,8 @@ class BaseModel(list):
                 # No free parameters, so component is a fixed.
                 # Entire value of fixed components
                 print(fixed_comp_data.shape)
-                print(component._compute_component().shape)
-                fixed_comp_data[:] += component._compute_component()
+                #print(component._compute_component().shape)
+                #fixed_comp_data[:] += component._compute_component()
 
         def get_parent_twin(parameter):
             if parameter.twin:
