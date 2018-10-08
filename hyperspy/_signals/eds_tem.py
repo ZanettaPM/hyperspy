@@ -511,11 +511,13 @@ class EDSTEM_mixin:
             kfactors = kfactors
             print('kfactors',kfactors)
 
-        if navigation_mask == None:
+        if navigation_mask is None:
             m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
             navigation_mask = BaseSignal(m) 
             navigation_mask.data[:,:] = False
-           
+        elif navigation_mask is not None:
+            navigation_mask = navigation_mask
+
         self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
         alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
              self.metadata.Acquisition_instrument.TEM.tilt_stage)*pi/180 
@@ -699,7 +701,7 @@ class EDSTEM_mixin:
             kfactors = kfactors
             print('kfactors',kfactors)
 
-        if navigation_mask == None:
+        if navigation_mask is None:
             m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
             navigation_mask = BaseSignal(m) 
             navigation_mask.data[:,:] = False
