@@ -39,6 +39,7 @@ from hyperspy.misc.eds.correct_result_2D import correct_result_2D
 from hyperspy.misc.material import _mass_absorption_mixture as mass_absorption_mixture
 from hyperspy.misc.material import weight_to_atomic
 from hyperspy.misc.material import atomic_to_weight
+from hyperspy.signal import BaseSignal
 
 
 _logger = logging.getLogger(__name__)
@@ -474,7 +475,7 @@ class EDSTEM_mixin:
         return mask
 
     
-    def correction(self, elts, Quant, result_int, result_mod, alpha, mt):
+    def correction(self, elts, Quant, result_int, result_mod, alpha, mt, navigation_mask):
         
         Ac = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
         wt = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
@@ -499,7 +500,7 @@ class EDSTEM_mixin:
                         result_mod[k].data[i][j] = result_int[k].data[i][j]*Ac[i][j][k]/(1-np.exp(-(Ac[i][j][k])*mt[i][j]/np.sin(alpha)))
         return result_mod
 
-    def absorption_correction_2D(self,result, kfactors='From_database', d = 3, t = 150, tilt_stage = 0, navigation_mask = 1.0):
+    def absorption_correction_2D(self,result, kfactors='From_database', d = 3, t = 150, tilt_stage = 0, navigation_mask = None):
 
         result=correct_result_2D(result)
 
@@ -509,7 +510,12 @@ class EDSTEM_mixin:
         else:
             kfactors = kfactors
             print('kfactors',kfactors)
-       
+
+        if navigation_mask == None:
+            m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
+            navigation_mask = BaseSignal(m) 
+            navigation_mask.data[:,:] = False
+           
         self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
         alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
              self.metadata.Acquisition_instrument.TEM.tilt_stage)*pi/180 
@@ -541,20 +547,20 @@ class EDSTEM_mixin:
             Quant = Quant2
             
             #Calculation of intensities corrected for absorption
-            result_mod = self.correction (elts, Quant, result_int, result_mod, alpha, mt)
+            result_mod = self.correction (elts, Quant, result_int, result_mod, alpha, mt, navigation_mask)
 
             #New quantification using corrected intensities
             Quant2 = self.quantification(method="CL", intensities=result_mod, factors=kfactors, composition_units='weight', navigation_mask=navigation_mask, plot_result=False)          
       
             #Compares the relative difference between previous and last quantification (convergence test value)
-            dif = np.zeros((len(self.metadata.Sample.xray_lines), len(result2[0].data), len(result2[0].data[0])), float)
+            dif = np.zeros((len(self.metadata.Sample.xray_lines), len(result[0].data), len(result[0].data[0])), float)
 
             for i in range (0,len(Quant)):
                 dif[i]= abs(Quant[i].data-Quant2[i].data)/Quant[i].data
-                dif[i] = dif[i].flatten()
-            for i in range (0, len(dif)):
-                if math.isnan(dif[i]):dif[i] = 0
-            dif = np.round(dif, decimals = 3)
+##                dif[i] = dif[i].flatten()
+##            for i in range (0, len(dif)):
+##                if math.isnan(dif[i]):dif[i] = 0
+##            dif = np.round(dif, decimals = 3)
 
         Quant3 = weight_to_atomic(Quant2, elements='auto')
         return Quant3, dif, mt
@@ -682,7 +688,7 @@ class EDSTEM_mixin:
 
         return Quant_H2O, H2O
 
-    def absorption_correction_auto_water_2D (self, result ,kfactors='From_database' , line1 = 'Fe_Ka', line2 = 'Fe_La', Elt_rat = 1, d = 3, t = 150, tilt_stage = 0, navigation_mask = 1.0, Crit = 1, valence = 2):
+    def absorption_correction_auto_water_2D (self, result ,kfactors='From_database' , line1 = 'Fe_Ka', line2 = 'Fe_La', Elt_rat = 1, d = 3, t = 150, tilt_stage = 0, navigation_mask = None, Crit = 1, valence = 2):
         
         result=correct_result_2D(result)
 
@@ -692,6 +698,11 @@ class EDSTEM_mixin:
         else:
             kfactors = kfactors
             print('kfactors',kfactors)
+
+        if navigation_mask == None:
+            m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
+            navigation_mask = BaseSignal(m) 
+            navigation_mask.data[:,:] = False
 
         self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
         alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
@@ -1063,11 +1074,11 @@ class EDSTEM_mixin:
                 if Q[:,j].any() != 0:
                     worksheet_table.write(k+1,i+1, Q[i][j]) 
                     if H2O_List is not None:
-                        worksheet_table.write (i+1, len(row)+1, H2O[i])
-                worksheet_table.write (i+1, len(row)+2, mt[i]/(d_or_t[i]*10**-7))
-                worksheet_table.write (i+1, len(row)+3, d_or_t[i])
-                #worksheet_table.write (i+1, len(row)+4, Dev[i])
-                k=k+1
+                        worksheet_table.write (k+1, len(row)+1, H2O[j])
+                    worksheet_table.write (k+1, len(row)+2, mt[j]/(d_or_t[j]*10**-7))
+                    worksheet_table.write (k+1, len(row)+3, d_or_t[j])
+                    #worksheet_table.write (k+1, len(row)+4, Dev[i])
+                    k=k+1
         for i in range(len(R)):
             k=0
             for j in range (len(R[0])):
