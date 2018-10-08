@@ -38,6 +38,8 @@ from hyperspy.misc.eds.kfactors import get_kfactors
 from hyperspy.misc.eds.correct_result_2D import correct_result_2D
 from hyperspy.misc.material import _mass_absorption_mixture as mass_absorption_mixture
 from hyperspy.misc.material import weight_to_atomic
+from hyperspy.misc.material import atomic_to_weight
+
 
 _logger = logging.getLogger(__name__)
 
@@ -474,13 +476,6 @@ class EDSTEM_mixin:
     
     def correction(self, elts, Quant, result_int, result_mod, alpha, mt):
         
-        """    F_Si = 0.005
-        F_S = 0.01
-        F_C = 0.00015
-        F_Ca = 0.0025
-        F_O = 0.006
-        F_Fe = 0.045"""
-        
         Ac = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
         wt = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
         
@@ -488,42 +483,15 @@ class EDSTEM_mixin:
             for j in range (0, len(Quant[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     for k in range(0, len(self.metadata.Sample.xray_lines)):
-                        wt[i][j][k]=Quant[k].data[i][j]
-            
+                        wt[i][j][k]=Quant[k].data[i][j]            
         print('initialization of Ac and wt is OK')
-
-        """wt_Si= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
-        wt_S= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
-        wt_C= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
-        wt_Ca= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
-        wt_O =np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
-
-        for k in range(0, len(Quant)):                  
-            if 'Si_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                wt_Si = Quant[k].data
-            if 'S_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                wt_S = Quant[k].data
-            if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                wt_C = Quant[k].data
-            if 'Ca_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                wt_Ca = Quant[k].data
-            if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                wt_O = Quant[k].data"""                       
+                 
 
         for i in range(0, len(Quant[0].data)):
             for j in range (0, len(Quant[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     for k in range (0, len(self.metadata.Sample.xray_lines)):
-                        Ac[i][j][k] = hs.material.mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
-                        """if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                            Ac[i][j][k] = (1+14*F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt[i][j][k])*Ac[i][j][k]
-                        if 'Ca_La' in Quant[k].metadata.Sample.xray_lines: 
-                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+0.5*F_C*wt_C[i][j]+F_Ca*wt[i][j][k])*Ac[i][j][k]
-                        if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
-                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.1*F_Ca*wt_Ca[i][j]+F_O*wt[i][j][k])*Ac[i][j][k]
-                        if 'Fe_La' in Quant[k].metadata.Sample.xray_lines: 
-                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.01*F_Ca*wt_Ca[i][j]+F_O*wt_O[i][j]+F_Fe*wt[i][j][k])*Ac[i][j][k]
-    """
+                        Ac[i][j][k] = mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
         print('AC calculation OK')
         
         #Calculate the corrected intensities thanks to the abs. correction factors           
@@ -536,10 +504,10 @@ class EDSTEM_mixin:
 
     def absorption_correction_2D(self,result, kfactors='From_database', d = 3, t = 150, tilt_stage = 0, navigation_mask = 1.0):
 
-        result2=correct_result_2D(result)
+        result=correct_result_2D(result)
 
         if kfactors == 'From_database' :
-            kfactors=get_kfactors(result2)
+            kfactors=get_kfactors(result)
             print('kfactors',kfactors)
         else:
             kfactors = kfactors
@@ -552,22 +520,22 @@ class EDSTEM_mixin:
         if t == 0:
             t = 1
        
-        mt = np.ones((len(result2[0].data), len(result2[0].data[0])), float)
-        for i in range (0, len(result2[0].data)):
-            for j in range (0, len(result2[0].data[0])):
+        mt = np.ones((len(result[0].data), len(result[0].data[0])), float)
+        for i in range (0, len(result[0].data)):
+            for j in range (0, len(result[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     mt[i][j]=(d*(t*10**-7))   
         
         elts = []
         for i in range(0, len(self.metadata.Sample.xray_lines)):
-            elts.append(result2[i].metadata.Sample.elements)   
+            elts.append(result[i].metadata.Sample.elements)   
         
-        dif = np.ones((len(self.metadata.Sample.xray_lines), len(result2[0].data), len(result2[0].data[0])), float)
+        dif = np.ones((len(self.metadata.Sample.xray_lines), len(result[0].data), len(result[0].data[0])), float)
         
         print('elts', elts)
         
-        result_int = copy.deepcopy(result2) # since result is manipulated many times, better copy it deeply before.
-        result_mod = copy.deepcopy(result2) 
+        result_int = copy.deepcopy(result) # since result is manipulated many times, better copy it deeply before.
+        result_mod = copy.deepcopy(result) 
 
         Quant = self.quantification(method="CL", intensities=result_int, factors=kfactors, composition_units='weight', navigation_mask=navigation_mask, plot_result=False)   
         Quant2 = Quant
@@ -593,6 +561,282 @@ class EDSTEM_mixin:
 
         Quant3 = weight_to_atomic(Quant2, elements='auto')
         return Quant3, dif, mt
+
+    
+
+    def correction_water(self, elts, Quant, result_int, result_mod, alpha, mt, navigation_mask):
+        
+        F_Si = 0.005
+        F_S = 0.01
+        F_C = 0.00015
+        F_Ca = 0.0025
+        F_O = 0.006
+        F_Fe = 0.045
+        
+        Ac = np.ones((len(result_int[0].data), len(result_int[0].data[0]), len(result_int)), 'float')
+        wt = np.ones((len(result_int[0].data), len(result_int[0].data[0]), len(result_int)), 'float')
+
+                #The absorption of each X ray line by all elements in the sample is calculated
+        
+        for i in range (0, len(result_int[0].data)):
+            for j in range (0, len(result_int[0].data[0])):
+                 if navigation_mask.data[i][j]== False:
+                    for k in range(0, len(self.metadata.Sample.xray_lines)):
+                        wt[i][j][k]=Quant[k].data[i][j]
+            
+        wt_Si= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_S= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_C= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_Ca= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_O =np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+
+        for k in range(0, len(Quant)):                  
+            if 'Si_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_Si = Quant[k].data
+            if 'S_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_S = Quant[k].data
+            if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_C = Quant[k].data
+            if 'Ca_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_Ca = Quant[k].data
+            if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_O = Quant[k].data                       
+        l=0
+        for i in range(0, len(Quant[0].data)):
+            for j in range (0, len(Quant[0].data[0])):
+                if navigation_mask.data[i][j]!= False:continue
+                l=l+1
+                for k in range (0, len(s.metadata.Sample.xray_lines)):
+                    Ac[i][j][k] = mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
+                    if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                        Ac[i][j][k] = (1+14*F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt[i][j][k])*Ac[i][j][k]
+                    if 'Ca_La' in Quant[k].metadata.Sample.xray_lines: 
+                        Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+0.5*F_C*wt_C[i][j]+F_Ca*wt[i][j][k])*Ac[i][j][k]
+                    if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                        Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.1*F_Ca*wt_Ca[i][j]+F_O*wt[i][j][k])*Ac[i][j][k]
+                    if 'Fe_La' in Quant[k].metadata.Sample.xray_lines: 
+                        Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.01*F_Ca*wt_Ca[i][j]+F_O*wt_O[i][j]+F_Fe*wt[i][j][k])*Ac[i][j][k]
+            print (l)
+        #Calculate the corrected intensities thanks to the abs. correction factors           
+        for i in range (0, len(Quant[0].data)):
+            for j in range (0, len(Quant[0].data[0])):
+                 if navigation_mask.data[i][j]== False:
+                    for k in range (0, len(self.metadata.Sample.xray_lines)):
+                        result_mod[k].data[i][j] = result_int[k].data[i][j]*Ac[i][j][k]/(1-np.exp(-(Ac[i][j][k])*mt[i][j]/np.sin(alpha)))
+        return result_mod
+
+    def compare (self, Quant1, Quant2, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask = 1.0):
+        # recalculate the difference between the two lines of interest for next iteration             
+        SubQuant = []
+        for i in range (0,len(Quant1)):
+            if line1 in Quant1[i].metadata.Sample.xray_lines : SubQuant.append(Quant1[i])
+        for i in range (0,len(Quant2)):
+            if line2 in Quant2[i].metadata.Sample.xray_lines : SubQuant.append(Quant2[i])
+            
+        rat = SubQuant[0].data/(Elt_rat*SubQuant[1].data)
+        rat = np.nan_to_num(rat)
+        Dev = (SubQuant[0].data - Elt_rat * SubQuant[1].data)/SubQuant[0].data
+        
+        print('line1/line2 deviation=', np.nanmedian(abs(Dev)),'  processing next iteration')
+        
+        for i in range(0, len(Quant1[0].data)):
+            for j in range (0, len(Quant1[0].data[0])):
+                if navigation_mask.data[i][j]!= False:continue
+                if mt[i,j] < (10*d*10**-7): print('pixel'+str(i)+str(j)+'has a Thickness that appears to be lower than 10 nm. Correction is at its minimum, something must be unaccurate (k-factors?, fitting model? or assumed element ratio?)')
+        return Dev, rat
+
+
+    def water_content_2D (self, quantification, valence):
+        """This routine calculate the water content of a quantified spectrum based on the electroneutrality assumption,
+        and add H to the list of elements.
+        
+        quantification : the output of the quantification routine
+        valence : water calculation requires the list of valences of each element to determine the charge balance. 
+        It should  be a list of values of the same length as the quantification output. Ex : for Fe3Si2O5(OH)4 if xray_lines
+        are 'Fe_Ka', 'Si_Ka' and 'O_Ka', valence  = [2, 4, -2].
+        """    
+        
+        import copy
+
+        Quant_H2O = copy.deepcopy(quantification)
+        H = copy.deepcopy(Quant_H2O[0])      # H (at.%) correspond to the charge excess, if any. 
+        H.metadata = copy.deepcopy(Quant_H2O[0].metadata)
+        H.metadata.General.title = 'atomic percent of H'
+        H.metadata.Sample.elements = ['H']
+        H.metadata.Sample.xray_lines = ['H_Ka']
+        for i in range (0, len(Quant_H2O[0].data)):
+            for j in range (0, len(Quant_H2O[0].data[0])):
+                H.data[i][j] = 0   
+            
+        for i in range (0, len(Quant_H2O)):
+            H = H + Quant_H2O[i]*(-1)*valence[i]
+
+        #Given that the totals are being modified, new at.% must be recalcutated for all elements.
+        for i in range (0, len(Quant_H2O)):
+            Quant_H2O[i] = (Quant_H2O[i]*100)/(H+100)
+        H = (H*100)/(H+100)
+
+        Quant_H2O.append(H)
+        Quant_H2O_wt = hs.material.atomic_to_weight(Quant_H2O)
+        
+        H2O = []
+        for i in range (0, len(Quant_H2O)):
+            if 'H_Ka' in Quant_H2O[i].metadata.Sample.xray_lines: H2O = Quant_H2O_wt[i].data*9
+
+        return Quant_H2O, H2O
+
+    def absorption_correction_auto_water_2D (self, result ,kfactors='From_database' , line1 = 'Fe_Ka', line2 = 'Fe_La', Elt_rat = 1, d = 3, t = 150, tilt_stage = 0, navigation_mask = 1.0, Crit = 1, valence = 2):
+        
+        result=correct_result_2D(result)
+
+        if kfactors == 'From_database' :
+            kfactors=get_kfactors(result)
+            print('kfactors',kfactors)
+        else:
+            kfactors = kfactors
+            print('kfactors',kfactors)
+
+        self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
+        alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
+             self.metadata.Acquisition_instrument.TEM.tilt_stage)*pi/180 
+        
+        for i in range (0,len(result)):
+            if line1 in result[i].metadata.Sample.xray_lines : Elt1 = result[i].metadata.Sample.elements
+            elif line2  in result[i].metadata.Sample.xray_lines : Elt2 = result[i].metadata.Sample.elements
+            
+        if t == 0:
+            t = 1
+       
+        mt = np.zeros((len(result[0].data), len(result[0].data[0])), float)
+        for i in range (0, len(result[0].data)):
+            for j in range (0, len(result[0].data[0])):
+                if navigation_mask.data[i][j]!= False : continue
+                mt[i][j]=(d*(t*10**-7))   
+        
+        elts = []
+        for i in range(0, len(self.metadata.Sample.xray_lines)):
+            elts.append(result[i].metadata.Sample.elements)   
+        
+        print('elts', elts)
+        
+        k=0
+        for i in range ((navigation_mask).data.shape[0]):
+            for j in range ((navigation_mask).data.shape[1]):
+                if navigation_mask.data[i, j] == False : k=k+1
+        print('number of pixels to deal with: ', k, 'total number of pixels: ', (navigation_mask).data.shape[1]*(navigation_mask).data.shape[0])
+        
+        Dev = np.ones((len(result[0].data), len(result[0].data[0])), float)
+        rat = np.ones((len(result[0].data), len(result[0].data[0])), float)   
+            
+        ### If the two elements used to calculate the mt value are the same, i.e. if ones uses Fe_Ka and Fe_La for instance, then two 
+        ## quantifications are made and the intesity of the other line is brought to zero.
+        if Elt1 == Elt2:
+            
+            result_int_K = copy.deepcopy(result) # since result is manipulated many times, better copy it deeply before.
+            result_int_L = copy.deepcopy(result)
+            result_mod_K = copy.deepcopy(result) 
+            result_mod_L = copy.deepcopy(result)
+            
+            for i in range (0,len(result_int_K)):
+                if line1 in result_int_L[i].metadata.Sample.xray_lines : result_int_L[i].data = np.zeros((len(result[0].data), len(result[0].data[0])), float)
+                elif line2 in result_int_K[i].metadata.Sample.xray_lines : result_int_K[i].data = np.zeros((len(result[0].data), len(result[0].data[0])), float)
+        
+            Quant_K = self.quantification(method="CL", intensities=result_int_K, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)     
+            Quant_L = self.quantification(method="CL", intensities=result_int_L, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)
+            
+            while (np.nanmedian(abs(Dev)) > Crit/100):
+                mt = rat*mt
+                
+                #Calculation of intensities corrected for absorption
+                result_mod_K = self.correction_water (elts, Quant_K, result_int_K, result_mod_K, alpha, mt, navigation_mask)
+                result_mod_L = self.correction_water (elts, Quant_L, result_int_L, result_mod_L, alpha, mt, navigation_mask)
+                
+                #New quantification using corrected intensities
+                Quant_K = self.quantification(method="CL", intensities=result_mod_K, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)
+                Quant_L = self.quantification(method="CL", intensities=result_mod_L, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)
+
+                # recalculate the difference between the two lines of interest for next iteration             
+                Dev, rat = self.compare (Quant_K, Quant_L, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
+                    
+            #####################################################################
+            ######  Further quantification using WATER corrected Abs Correction factors
+
+            Quant_K = weight_to_atomic(Quant_K, elements='auto')
+            Quant_K, H2O = self.water_content_2D(Quant_K, valence)
+            Quant_K = atomic_to_weight(Quant_K, elements='auto')
+
+            Quant_L = weight_to_atomic(Quant_L, elements='auto')
+            Quant_L, H2O = self.water_content_2D(Quant_L, valence)
+            Quant_L = atomic_to_weight(Quant_L, elements='auto')
+
+            Dev = np.ones((len(result[0].data), len(result[0].data[0])), float)
+            while (np.nanmedian(abs(Dev)) > Crit/100):
+                mt = rat*mt
+
+                result_mod_K = self.correction_water (elts, Quant_K, result_int_K, result_mod_K, alpha, mt, navigation_mask)
+                result_mod_L = self.correction_water (elts, Quant_L, result_int_L, result_mod_L, alpha, mt, navigation_mask)
+                
+                #New quantification using corrected Abs Correction factors
+                Quant_K = self.quantification(method="CL", intensities=result_mod_K, factors=kfactors, composition_units='atomic', navigation_mask = navigation_mask, plot_result=False)
+                Quant_K, H2O = self.water_content_2D (Quant_K, valence)
+                Quant_K = atomic_to_weight(Quant_K, elements='auto')
+
+                Quant_L = self.quantification(method="CL", intensities=result_mod_L, factors=kfactors, composition_units='atomic', navigation_mask = navigation_mask, plot_result=False)
+                Quant_L, H2O = self.water_content_2D (Quant_L, valence)
+                Quant_L = atomic_to_weight(Quant_L, elements='auto')
+                        
+                Dev, rat = self.compare (Quant_K, Quant_L, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
+                        
+            print('Water computed')
+            
+            Quant3 = weight_to_atomic(Quant_K, elements = 'auto')
+     
+    ###########################################################################################################        
+    ### If two different elements are used, then only one quantification is performed and the convergence criteria are internal to this calculation
+        
+        if Elt1 != Elt2:
+                    
+            result_int = copy.deepcopy(result)
+            result_mod = copy.deepcopy(result)
+            
+            Quant2 = self.quantification(method="CL", intensities=result_int, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)
+                  
+            while (np.nanmedian(abs(Dev)) > Crit/100):
+                mt = rat*mt
+                       
+                result_mod = self.correction_water (elts, Quant2, result_int, result_mod, alpha, mt, navigation_mask)
+        
+                #New quantification using corrected Abs Correction factors
+                Quant2 = self.quantification(method="CL", intensities=result_mod, factors=kfactors, composition_units='weight', navigation_mask = navigation_mask, plot_result=False)
+
+                # recalculate the difference between the two lines of interest for next iteration             
+                Dev, rat = self.compare (Quant2, Quant2, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
+            
+            ###########################################
+            #New quantification using WATER corrected Abs Correction factors
+            ############################################
+            
+            Quant2 = weight_to_atomic(Quant2, elements='auto')
+            Quant2, H2O = self.water_content_2D (Quant2, valence)
+            Quant2 = atomic_to_weight(Quant2, elements='auto')
+            
+            Dev = np.ones((len(result[0].data), len(result[0].data[0])), float)
+            while (np.nanmedian(abs(Dev)) > Crit/100):
+                mt = rat*mt
+            
+                result_mod = self.correction_water (s, elts, Quant2, result_int, result_mod, alpha, mt, navigation_mask)
+        
+                #New quantification using corrected Abs Correction factors
+                Quant2 = self.quantification(method="CL", intensities=result_mod, factors=kfactors, composition_units='atomic', navigation_mask = navigation_mask, plot_result=False)
+                Quant2, H2O = self.water_content_2D (Quant2, valence)
+                Quant2 = atomic_to_weight(Quant2, elements='auto')
+
+                # recalculate the difference between the two lines of interest for next iteration             
+                Dev, rat = self.compare (Quant2, Quant2, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
+            print('Water computed')
+      
+            Quant3 = weight_to_atomic(Quant2, elements='auto')
+        return Quant3, H2O, mt, Dev
 
 
     def decomposition(self,
