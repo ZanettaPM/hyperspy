@@ -483,16 +483,13 @@ class EDSTEM_mixin:
             for j in range (0, len(Quant[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     for k in range(0, len(self.metadata.Sample.xray_lines)):
-                        wt[i][j][k]=Quant[k].data[i][j]            
-        print('initialization of Ac and wt is OK')
+                        wt[i][j][k]=Quant[k].data[i][j]
                  
-
         for i in range(0, len(Quant[0].data)):
             for j in range (0, len(Quant[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     for k in range (0, len(self.metadata.Sample.xray_lines)):
                         Ac[i][j][k] = mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
-        print('AC calculation OK')
         
         #Calculate the corrected intensities thanks to the abs. correction factors           
         for i in range (0, len(Quant[0].data)):
