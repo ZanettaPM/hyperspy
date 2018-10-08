@@ -19,10 +19,14 @@
 
 import warnings
 import logging
+import math
+import copy
+import xlsxwriter
 
 import traits.api as t
 import numpy as np
 from scipy import constants
+from scipy import pi
 
 from hyperspy.signal import BaseSetMetadataItems
 from hyperspy import utils
@@ -30,6 +34,10 @@ from hyperspy._signals.eds import (EDSSpectrum, LazyEDSSpectrum)
 from hyperspy.defaults_parser import preferences
 from hyperspy.misc.eds import utils as utils_eds
 from hyperspy.ui_registry import add_gui_method, DISPLAY_DT, TOOLKIT_DT
+from hyperspy.misc.eds.kfactors import get_kfactors
+from hyperspy.misc.eds.correct_result_2D import correct_result_2D
+from hyperspy.misc.material import _mass_absorption_mixture as mass_absorption_mixture
+from hyperspy.misc.material import weight_to_atomic
 
 _logger = logging.getLogger(__name__)
 
@@ -463,6 +471,130 @@ class EDSTEM_mixin:
             mask.data = binary_dilation(mask.data, border_value=0)
         return mask
 
+    
+    def correction(self, elts, Quant, result_int, result_mod, alpha, mt):
+        
+        """    F_Si = 0.005
+        F_S = 0.01
+        F_C = 0.00015
+        F_Ca = 0.0025
+        F_O = 0.006
+        F_Fe = 0.045"""
+        
+        Ac = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
+        wt = np.zeros((len(Quant[0].data), len(Quant[0].data[0]), len(Quant)), 'float')
+        
+        for i in range (0, len(Quant[0].data)):
+            for j in range (0, len(Quant[0].data[0])):
+                if navigation_mask.data[i][j]== False:
+                    for k in range(0, len(self.metadata.Sample.xray_lines)):
+                        wt[i][j][k]=Quant[k].data[i][j]
+            
+        print('initialization of Ac and wt is OK')
+
+        """wt_Si= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_S= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_C= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_Ca= np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+        wt_O =np.zeros((len(Quant[0].data), len(Quant[0].data[0])), float)
+
+        for k in range(0, len(Quant)):                  
+            if 'Si_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_Si = Quant[k].data
+            if 'S_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_S = Quant[k].data
+            if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_C = Quant[k].data
+            if 'Ca_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_Ca = Quant[k].data
+            if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                wt_O = Quant[k].data"""                       
+
+        for i in range(0, len(Quant[0].data)):
+            for j in range (0, len(Quant[0].data[0])):
+                if navigation_mask.data[i][j]== False:
+                    for k in range (0, len(self.metadata.Sample.xray_lines)):
+                        Ac[i][j][k] = hs.material.mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
+                        """if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                            Ac[i][j][k] = (1+14*F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt[i][j][k])*Ac[i][j][k]
+                        if 'Ca_La' in Quant[k].metadata.Sample.xray_lines: 
+                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+0.5*F_C*wt_C[i][j]+F_Ca*wt[i][j][k])*Ac[i][j][k]
+                        if 'O_Ka' in Quant[k].metadata.Sample.xray_lines: 
+                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.1*F_Ca*wt_Ca[i][j]+F_O*wt[i][j][k])*Ac[i][j][k]
+                        if 'Fe_La' in Quant[k].metadata.Sample.xray_lines: 
+                            Ac[i][j][k] = (1+F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt_C[i][j]+0.01*F_Ca*wt_Ca[i][j]+F_O*wt_O[i][j]+F_Fe*wt[i][j][k])*Ac[i][j][k]
+    """
+        print('AC calculation OK')
+        
+        #Calculate the corrected intensities thanks to the abs. correction factors           
+        for i in range (0, len(Quant[0].data)):
+            for j in range (0, len(Quant[0].data[0])):
+                if navigation_mask.data[i][j]== False:
+                    for k in range (0, len(self.metadata.Sample.xray_lines)):
+                        result_mod[k].data[i][j] = result_int[k].data[i][j]*Ac[i][j][k]/(1-np.exp(-(Ac[i][j][k])*mt[i][j]/np.sin(alpha)))
+        return result_mod
+
+    def absorption_correction_2D(self,result, kfactors='From_database', d = 3, t = 150, tilt_stage = 0, navigation_mask = 1.0):
+
+        result2=correct_result_2D(result)
+
+        if kfactors == 'From_database' :
+            kfactors=get_kfactors(result2)
+            print('kfactors',kfactors)
+        else:
+            kfactors = kfactors
+            print('kfactors',kfactors)
+       
+        self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
+        alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
+             self.metadata.Acquisition_instrument.TEM.tilt_stage)*pi/180 
+            
+        if t == 0:
+            t = 1
+       
+        mt = np.ones((len(result2[0].data), len(result2[0].data[0])), float)
+        for i in range (0, len(result2[0].data)):
+            for j in range (0, len(result2[0].data[0])):
+                if navigation_mask.data[i][j]== False:
+                    mt[i][j]=(d*(t*10**-7))   
+        
+        elts = []
+        for i in range(0, len(self.metadata.Sample.xray_lines)):
+            elts.append(result2[i].metadata.Sample.elements)   
+        
+        dif = np.ones((len(self.metadata.Sample.xray_lines), len(result2[0].data), len(result2[0].data[0])), float)
+        
+        print('elts', elts)
+        
+        result_int = copy.deepcopy(result2) # since result is manipulated many times, better copy it deeply before.
+        result_mod = copy.deepcopy(result2) 
+
+        Quant = self.quantification(method="CL", intensities=result_int, factors=kfactors, composition_units='weight', navigation_mask=navigation_mask, plot_result=False)   
+        Quant2 = Quant
+        
+        while (abs(dif) > 0.005).any():
+            Quant = Quant2
+            
+            #Calculation of intensities corrected for absorption
+            result_mod = self.correction (elts, Quant, result_int, result_mod, alpha, mt)
+
+            #New quantification using corrected intensities
+            Quant2 = self.quantification(method="CL", intensities=result_mod, factors=kfactors, composition_units='weight', navigation_mask=navigation_mask, plot_result=False)          
+      
+            #Compares the relative difference between previous and last quantification (convergence test value)
+            dif = np.zeros((len(self.metadata.Sample.xray_lines), len(result2[0].data), len(result2[0].data[0])), float)
+
+            for i in range (0,len(Quant)):
+                dif[i]= abs(Quant[i].data-Quant2[i].data)/Quant[i].data
+                dif[i] = dif[i].flatten()
+            for i in range (0, len(dif)):
+                if math.isnan(dif[i]):dif[i] = 0
+            dif = np.round(dif, decimals = 3)
+
+        Quant3 = weight_to_atomic(Quant2, elements='auto')
+        return Quant3, dif, mt
+
+
     def decomposition(self,
                       normalize_poissonian_noise=True,
                       navigation_mask=1.0,
@@ -643,6 +775,65 @@ class EDSTEM_mixin:
             return live_time * beam_current * 1e-9 / constants.e
         else:
             raise Exception('Method need to be \'zeta\' or \'cross_section\'.')
+
+
+    def data_output_2D (self, Quant, result, mt_List, H2O_List=None, density_or_thickness=2.7, name = 'data.xlsx'):    #H2O_List, mt_List, density_or_thickness, Dev
+
+        result2=correct_result_2D(result)
+        
+        workbook = xlsxwriter.Workbook(name)
+        worksheet_table = workbook.add_worksheet(name = 'Quantifed data')
+        worksheet_error = workbook.add_worksheet(name = 'Errors')
+        
+        Q = np.ndarray((len(Quant), len((Quant[0].data).flatten())))
+        for i in range (len (Quant)):
+            Q[i] = (Quant[i].data).flatten()
+
+
+        R = np.ndarray((len(result), len((result[0].data).flatten())))
+        for i in range (len (result)):
+            R[i] = (result[i].data).flatten()
+        
+        mt = mt_List.flatten()
+        
+        if H2O_List is not None:
+            H2O = H2O_List.flatten()
+
+        d_or_t = np.ones(shape=mt.shape, dtype=float)
+        for i in range (0, len(d_or_t)):
+            d_or_t[i]= density_or_thickness
+
+
+        row = []
+        for i in range (0, len(Quant)):
+            row.append(0)
+            row [i] = str(Quant[i].metadata.Sample.xray_lines)
+        worksheet_table.write_row ('B1', row)
+        worksheet_error.write_row ('B1', row)
+        if H2O_List is not None:
+            worksheet_table.write (0, len(row)+1, 'H2O')
+        worksheet_table.write(0, len(row)+2, 'Deduced t or d')
+        worksheet_table.write(0, len(row)+3, 'Chosen t or d')
+        #worksheet_table.write(0, len(row)+4, 'Auto Abs . Cor. deviation')
+        
+        for i in range(len(Q)):
+            k=0
+            for j in range (len(Q[0])):
+                if Q[:,j].any() != 0:
+                    worksheet_table.write(k+1,i+1, Q[i][j]) 
+                    if H2O_List is not None:
+                        worksheet_table.write (i+1, len(row)+1, H2O[i])
+                worksheet_table.write (i+1, len(row)+2, mt[i]/(d_or_t[i]*10**-7))
+                worksheet_table.write (i+1, len(row)+3, d_or_t[i])
+                #worksheet_table.write (i+1, len(row)+4, Dev[i])
+                k=k+1
+        for i in range(len(R)):
+            k=0
+            for j in range (len(R[0])):
+                if Q[:,j].any() != 0 and R[i][j]!=0:
+                    worksheet_error.write(k+1,i+1, (Q[i][j]*R[i][j]**0.5)/(R[i][j]))
+                    k=k+1
+            workbook.close()
 
 
 class EDSTEMSpectrum(EDSTEM_mixin, EDSSpectrum):
