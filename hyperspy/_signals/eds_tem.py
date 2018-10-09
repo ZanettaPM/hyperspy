@@ -843,7 +843,6 @@ class EDSTEM_mixin:
 
                 # recalculate the difference between the two lines of interest for next iteration             
                 Dev, rat = self.compare (Quant2, Quant2, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
-                print (Dev)
             print('Water computed')
       
             Quant3 = weight_to_atomic(Quant2, elements='auto')
