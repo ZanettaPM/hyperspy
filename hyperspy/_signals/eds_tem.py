@@ -547,7 +547,7 @@ class EDSTEM_mixin:
         
         while (abs(dif) > 0.005).any():
             Quant = Quant2
-            
+            print('line1/line2 deviation=', np.nanmedian(abs(dif)),'  processing next iteration')
             #Calculation of intensities corrected for absorption
             result_mod = self.correction (elts, Quant, result_int, result_mod, alpha, mt, navigation_mask)
 
@@ -611,7 +611,7 @@ class EDSTEM_mixin:
             for j in range (0, len(Quant[0].data[0])):
                 if navigation_mask.data[i][j]!= False:continue
                 l=l+1
-                for k in range (0, len(s.metadata.Sample.xray_lines)):
+                for k in range (0, len(self.metadata.Sample.xray_lines)):
                     Ac[i][j][k] = mass_absorption_mixture(wt[i][j], elts, energies = self.metadata.Sample.xray_lines[k])
                     if 'C_Ka' in Quant[k].metadata.Sample.xray_lines: 
                         Ac[i][j][k] = (1+14*F_Si*wt_Si[i][j]+F_S*wt_S[i][j]+F_C*wt[i][j][k])*Ac[i][j][k]
@@ -682,7 +682,7 @@ class EDSTEM_mixin:
         H = (H*100)/(H+100)
 
         Quant_H2O.append(H)
-        Quant_H2O_wt = hs.material.atomic_to_weight(Quant_H2O)
+        Quant_H2O_wt = atomic_to_weight(Quant_H2O)
         
         H2O = []
         for i in range (0, len(Quant_H2O)):
@@ -843,6 +843,7 @@ class EDSTEM_mixin:
 
                 # recalculate the difference between the two lines of interest for next iteration             
                 Dev, rat = self.compare (Quant2, Quant2, Dev, rat, line1, line2, Elt_rat, mt, d, navigation_mask)
+                print (Dev)
             print('Water computed')
       
             Quant3 = weight_to_atomic(Quant2, elements='auto')
