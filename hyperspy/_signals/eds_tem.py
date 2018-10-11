@@ -524,18 +524,16 @@ class EDSTEM_mixin:
             
         if t == 0:
             t = 1
-       
+
         mt = np.ones((len(result[0].data), len(result[0].data[0])), float)
         for i in range (0, len(result[0].data)):
             for j in range (0, len(result[0].data[0])):
                 if navigation_mask.data[i][j]== False:
                     mt[i][j]=(d*(t*10**-7))   
-        
+        dif= np.ones((len(self.metadata.Sample.xray_lines), len(result[0].data), len(result[0].data[0])), float)
         elts = []
         for i in range(0, len(self.metadata.Sample.xray_lines)):
-            elts.append(result[i].metadata.Sample.elements)   
-        
-        dif = np.ones((len(self.metadata.Sample.xray_lines), len(result[0].data), len(result[0].data[0])), float)
+            elts.append(result[i].metadata.Sample.elements)
         
         print('elts', elts)
         
@@ -701,11 +699,6 @@ class EDSTEM_mixin:
             kfactors = kfactors
             print('kfactors',kfactors)
 
-        if navigation_mask is None:
-            m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
-            navigation_mask = BaseSignal(m) 
-            navigation_mask.data[:,:] = False
-
         self.metadata.Acquisition_instrument.TEM.tilt_stage = tilt_stage
         alpha = (self.metadata.Acquisition_instrument.TEM.Detector.EDS.elevation_angle + 
              self.metadata.Acquisition_instrument.TEM.tilt_stage)*pi/180 
@@ -713,15 +706,22 @@ class EDSTEM_mixin:
         for i in range (0,len(result)):
             if line1 in result[i].metadata.Sample.xray_lines : Elt1 = result[i].metadata.Sample.elements
             elif line2  in result[i].metadata.Sample.xray_lines : Elt2 = result[i].metadata.Sample.elements
+
+        if navigation_mask is None:
+            m = np.ndarray((self.data.shape[0], self.data.shape[1]), bool)
+            navigation_mask = BaseSignal(m) 
+            navigation_mask.data[:,:] = False
+        elif navigation_mask != None:
+                navigation_mask = navigation_mask
             
         if t == 0:
             t = 1
        
-        mt = np.zeros((len(result[0].data), len(result[0].data[0])), float)
+        mt = np.ones((len(result[0].data), len(result[0].data[0])), float)
         for i in range (0, len(result[0].data)):
             for j in range (0, len(result[0].data[0])):
-                if navigation_mask.data[i][j]!= False : continue
-                mt[i][j]=(d*(t*10**-7))   
+                if navigation_mask.data[i][j]== False:
+                    mt[i][j]=(d*(t*10**-7))    
         
         elts = []
         for i in range(0, len(self.metadata.Sample.xray_lines)):
@@ -834,7 +834,7 @@ class EDSTEM_mixin:
             while (np.nanmedian(abs(Dev)) > Crit/100):
                 mt = rat*mt
             
-                result_mod = self.correction_water (s, elts, Quant2, result_int, result_mod, alpha, mt, navigation_mask)
+                result_mod = self.correction_water (elts, Quant2, result_int, result_mod, alpha, mt, navigation_mask)
         
                 #New quantification using corrected Abs Correction factors
                 Quant2 = self.quantification(method="CL", intensities=result_mod, factors=kfactors, composition_units='atomic', navigation_mask = navigation_mask, plot_result=False)

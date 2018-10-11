@@ -257,6 +257,10 @@ class Physical_background(Component):
         
         if len(self.model.axes_manager.shape)==1:
             self.quanti.value=Wpercent(self.model,E0,self._whitelist['quanti'])
+        elif len(self.model.axes_manager.shape)==2:
+            self.quanti.map['values'][:] = Wpercent(self.model,E0,self._whitelist['quanti'])
+            self.quanti.map['is_set'][:] = True
+            self.quanti.value=self.quanti.map['values'][0,:]
         else: 
             self.quanti.map['values'][:] = Wpercent(self.model,E0,self._whitelist['quanti'])
             self.quanti.map['is_set'][:] = True
