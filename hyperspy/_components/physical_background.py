@@ -266,17 +266,13 @@ class Physical_background(Component):
             self.quanti.map['is_set'][:] = True
             self.quanti.value=self.quanti.map['values'][0,0,:]    
 
-        self.Window._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-        self.Window.value=Windowabsorption(self.model,self._whitelist['detector'])
-        self.Window._create_array()# take too much memory...
+        self._whitelist['Window']=Windowabsorption(self.model,self._whitelist['detector'])
+        
         
         if self.coating_thickness.value>0:
-            self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-            self.MuC.value=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
-            self.MuC._create_array()# take too much memory...
+            self._whitelist['Coating']=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
         else:
-            #self.MuC._number_of_elements=len(self.model._signal.axes_manager.signal_axes[-1].axis)
-            self.MuC.value=1#np.ones(len(self.model._signal.axes_manager.signal_axes[-1].axis))
+            self.MuC.value=1
             self.MuC._create_array()
 
         return {'Quant map has been created'}
@@ -290,19 +286,22 @@ class Physical_background(Component):
         E0=self.E0.value
         teta=self.teta.value
         
-        
+        if type(self._whitelist['quanti']) is np.ndarray:
+            Mu=Mucoef(self.model,self.quanti.value)
         Mu=Mucoef(self.model,self.quanti.value)
         Mu=np.array(Mu,dtype=float)
         
         #Window=Windowabsorption(self.model,self._whitelist['detector'])
-        Window=np.array(self.Window.value,dtype=float)
+        Window=np.array(self._whitelist['Window'],dtype=float)
+        self.Window.value=np.array(self._whitelist['Window'],dtype=float)
         Window=Window[self.model.channel_switches]
 
-        if self.MuC._number_of_elements==1 :
-            coating=1
-        else :
-            coating=np.array(self.MuC.value,dtype=float)
+        if self.coating_thickness.value>0 :
+            coating=np.array(self._whitelist['Coating'],dtype=float)
+            self.coating.value=np.array(self._whitelist['Coating'],dtype=float)
             coating=coating[self.model.channel_switches]
+        else :
+            coating=1
         
         cosec=self.teta.value
 	
