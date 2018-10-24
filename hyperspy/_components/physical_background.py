@@ -212,8 +212,8 @@ class Physical_background(Component):
 	This dictionnary is call in the function Wpercent() to calculate an array of weight percent with the same dimension than the model and a length which correspond to the number of elements filled in the metadata
     """
 
-    def __init__(self, E0, detector, quantification, absorption_model,TOA ,coating_thickness, coefficients=1, Window=0, quanti=1, MuC=0):
-        Component.__init__(self,['coefficients','E0','Window','MuC','quanti','teta','coating_thickness'])
+    def __init__(self, E0, detector, quantification, absorption_model,TOA,coating_thickness,Phase_map):
+        Component.__init__(self,['coefficients','E0','quanti','teta','coating_thickness'])
 
         self.coefficients._number_of_elements = 2
         self.coefficients.value = (1,1)
@@ -228,15 +228,12 @@ class Physical_background(Component):
         self._whitelist['quanti'] = quantification
         self._whitelist['detector'] = detector
         self._whitelist['absorption_model'] = absorption_model
-        self.quanti.value=quanti
+        self._whitelist['carto'] = Phase_map
+        self.quanti.value=1
 
-        self.Window.value=Window
-        self.MuC.value=MuC
 
         self.E0.free=False
         self.coefficients.free=True
-        self.Window.free=False
-        self.MuC.free=False
         self.teta.free=False
         self.coating_thickness.free=False
         self.quanti.free=False
@@ -266,16 +263,19 @@ class Physical_background(Component):
             self.quanti.map['is_set'][:] = True
             self.quanti.value=self.quanti.map['values'][0,0,:]    
 
-        self._whitelist['Window']=Windowabsorption(self.model,self._whitelist['detector'])
-        
+        self._whitelist['Window_absorption']=Windowabsorption(self.model,self._whitelist['detector'])
         
         if self.coating_thickness.value>0:
-            self._whitelist['Coating']=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
-        else:
-            self.MuC.value=1
-            self.MuC._create_array()
+            self._whitelist['Coating_absroption']=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
 
-        return {'Quant map has been created'}
+        carto=self._whitelist['carto']
+        if carto is not None:
+            Mu=[]
+            for i in range (1,int(np.max(carto)+1)):
+                Mu.append(Mucoef(self.model,self.quanti.map['values'][carto==i][0]))
+            self._whitelist['Mu']=Mu
+
+        return {'Quant map and absorption correction parameters have been created'}
         
     def function(self,x):
  
@@ -286,19 +286,24 @@ class Physical_background(Component):
         E0=self.E0.value
         teta=self.teta.value
         
-        if type(self._whitelist['quanti']) is np.ndarray:
+##        if type(self._whitelist['quanti']) is np.ndarray:
+##            Mu=Mucoef(self.model,self.quanti.value)
+        carto=self._whitelist['carto']
+        if carto is not None:
+            index=self.model._signal.axes_manager.coordinates
+            phaseN=carto[int(index[1]),int(index[0])]
+            Mu=self._whitelist['Mu'][int(phaseN-1)]
+            Mu=np.array(Mu,dtype=float)
+            Mu=Mu[self.model.channel_switches]
+        else:
             Mu=Mucoef(self.model,self.quanti.value)
-        Mu=Mucoef(self.model,self.quanti.value)
-        Mu=np.array(Mu,dtype=float)
+            Mu=np.array(Mu,dtype=float)
         
-        #Window=Windowabsorption(self.model,self._whitelist['detector'])
-        Window=np.array(self._whitelist['Window'],dtype=float)
-        self.Window.value=np.array(self._whitelist['Window'],dtype=float)
+        Window=np.array(self._whitelist['Window_absorption'],dtype=float)
         Window=Window[self.model.channel_switches]
 
         if self.coating_thickness.value>0 :
-            coating=np.array(self._whitelist['Coating'],dtype=float)
-            self.coating.value=np.array(self._whitelist['Coating'],dtype=float)
+            coating=np.array(self._whitelist['Coating_absroption'],dtype=float)
             coating=coating[self.model.channel_switches]
         else :
             coating=1
