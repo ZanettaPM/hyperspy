@@ -272,7 +272,7 @@ class Physical_background(Component):
         if carto is not None:
             Mu=[]
             for i in range (1,int(np.max(carto)+1)):
-                Mu.append(Mucoef(self.model,self.quanti.map['values'][carto==i][0]))
+                Mu.append(Mucoef(self.model,np.mean(self.quanti.map['values'][carto==i],axis=0)))
             self._whitelist['Mu']=Mu
 
         return {'Quant map and absorption correction parameters have been created'}
@@ -285,9 +285,7 @@ class Physical_background(Component):
         
         E0=self.E0.value
         teta=self.teta.value
-        
-##        if type(self._whitelist['quanti']) is np.ndarray:
-##            Mu=Mucoef(self.model,self.quanti.value)
+
         carto=self._whitelist['carto']
         if carto is not None:
             index=self.model._signal.axes_manager.coordinates
