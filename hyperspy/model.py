@@ -932,10 +932,10 @@ class BaseModel(list):
                             free[free_parameter.name])
                     fixed_comp_data[:] += component._compute_expression_part(
                         fixed)
-            else:
+            #else:
                 # No free parameters, so component is a fixed.
                 # Entire value of fixed components
-                print(fixed_comp_data.shape)
+                #print(fixed_comp_data.shape)
                 #print(component._compute_component().shape)
                 #fixed_comp_data[:] += component._compute_component()
 
