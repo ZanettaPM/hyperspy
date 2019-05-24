@@ -24,6 +24,7 @@ from hyperspy.misc import elements as element_db
 from hyperspy.external.mpfit import mpfit
 from hyperspy.misc.material import atomic_to_weight
 from hyperspy.misc.eds.detector_efficiency import detector_efficiency
+from scipy.interpolate import interp1d
 
 def Wpercent(model,E0,quantification):
     """
@@ -34,12 +35,12 @@ def Wpercent(model,E0,quantification):
     model: EDS model
     E0: int
             The Beam energy
-    quantification: None / list /or array
+    quantification: None or a list or an array
             if quantification is None, this function calculate an  approximation of a quantification based on peaks ratio thanks to the function s.get_lines_intensity(). 
-            if quantification is the result of the hyperspy quantification function (only for TEM analysis). This function only convert the result in an array with the same navigation shape than the model and a length equal to the number of elements 
+            if quantification is the result of the hyperspy quantification function. This function only convert the result in an array with the same navigation shape than the model and a length equal to the number of elements 
             if quantification is already an array of weight percent, directly keep the array
     """
- 	
+ 	                   
     if quantification is None :                 
         model.signal.set_lines([])
         intensity=model.signal.get_lines_intensity(only_one=True)
@@ -95,8 +96,26 @@ def Wpercent(model,E0,quantification):
             t=u.sum() 
             for i in range (0,len(u)):
                 weight[i] =u[i] /t*100
+
+    elif quantification == 'Mean':
+        model.signal.set_lines([])
+        intensity=model.signal.sum().get_lines_intensity(only_one=True)
+        u=np.ones([len(model._signal.metadata.Sample.elements)])
+        for i in range (0,len(intensity)):
+            if "Ka" in intensity [i].metadata.General.title :
+                u[i] =intensity[i].data
+            elif "La" in intensity [i].metadata.General.title:
+                u[i] =intensity[i].data*2.5
+            elif "La" in intensity [i].metadata.General.title:
+                u[i] =intensity[i].data*2.8        
+        weight=np.ones([len(model._signal.metadata.Sample.elements)] )
+        t=u.sum() 
+        for i in range (0,len(u)):
+            weight[i] =u[i] /t*100
+                
     elif type(quantification) is np.ndarray: 
         weight=quantification
+
 
     else:
         result=quantification
@@ -122,10 +141,17 @@ def Wpercent(model,E0,quantification):
 		    
     return weight
 
+##def MeanZ (model,quanti):     
+##
+##    w=quanti
+##    z=0
+##    for i in range (0,len(model._signal.metadata.Sample.elements)):
+##        z+=(element_db.elements[model._signal.metadata.Sample.elements[i]]['General_properties']['Z'])*(w[i]/100)
+##    return z
 
 def Mucoef(model,quanti): # this function calculate the absorption coefficient for all energy. This, correspond to the Mu parameter in the function
     """
-    Calculate the mass absorption coefficient for all energy of the model axis for each pixel. Need a weigth percent array defined by the Wpercent function
+    Calculate the mass absorption coefficient for all energy of the model axis for each pixel. Need the weigth percent array defined by the Wpercent function
     Return the Mu parameter as a signal (all energy) with same number of elements than the model
     This parameter is calculated at each iteration during the fit
     Parameters
@@ -148,7 +174,7 @@ def Mucoef(model,quanti): # this function calculate the absorption coefficient f
 
 def Cabsorption(model): # this function calculate the absorption coefficient for all energy. This, correspond to the MuC parameter in the function
     """
-    Calculate the mass absorption coefficient due to the thin coating layer for all energy 
+    Calculate the mass absorption coefficient due to the coating layer for all energy 
     Parameters
     ----------
     model: EDS model
@@ -157,6 +183,8 @@ def Cabsorption(model): # this function calculate the absorption coefficient for
 
     t=(np.linspace(model._signal.axes_manager[-1].offset,model._signal.axes_manager[-1].size*model._signal.axes_manager[-1].scale,model._signal.axes_manager[-1].size))
     Acc=mass_absorption_coefficient(element='C' , energies=t)    
+    #b=(model._signal.axes_manager.signal_axes[-1].axis)
+    #Acc=np.interp(b,t,Acc) # Interpolation allows to gain some time
     
     return Acc
 
@@ -173,7 +201,7 @@ def Windowabsorption(model,detector):
             String can be 'Polymer_C' / 'Super_X' / '12µm_BE' / '25µm_BE' / '100µm_BE' / 'Polymer_C2' / 'Polymer_C3' 
             Data are contain in a dictionnary in hyperspy repository
             
-            An np.array with values of detector efficiency can be used if personnal data are needed 
+            An array with values of detector efficiency can be used if personnal data are needed 
     """	
     if type(detector) is str:
         a=np.array(detector_efficiency[detector])
@@ -196,18 +224,24 @@ class Physical_background(Component):
 
     """
     Background component based on kramer's law and absorption coefficients
-
-    Fitted attributes
+    Attributes
     ----------
     coefficients : float (length = 2) 
     	The only two free parameters of this component. If the function fix_background is used those two coefficients are fixed
+    E0 : int
+    	The beam energy of the acquisition
+    Window : int 
+    	Contain the signal of the detector efficiency (calculated thanks to the function Windowabsorption())
+    quanti: dictionnary
+    	Contain the referenced variable quantification (none, result of CL quantification or an array) 
+	This dictionnary is call in the function Wpercent() to calculate an array of weight percent with the same dimension than the model and a length which correspond to the number of elements filled in the metadata
     """
 
     def __init__(self, E0, detector, quantification, absorption_model,TOA,coating_thickness,Phase_map):
         Component.__init__(self,['coefficients','E0','quanti','teta','coating_thickness'])
 
         self.coefficients._number_of_elements = 2
-        self.coefficients.value = (1,1)
+        self.coefficients.value = (1,100)
         
         self.E0.value=E0
         self.teta.value=TOA
@@ -235,21 +269,14 @@ class Physical_background(Component):
         self.coefficients.bmin=0
         self.coefficients.bmax=1e6
         
-    def initialize(self):
+    def initialize(self): # this function is necessary to initialize the quant map
 
-        """
-        Function
-        
-        This function is a necessary step to fit the physical background function
-        
-        It allow to initialize the quant map but also the different curves needed for the absorption correction.
-        Curves initialized here are: the absorption by the thin window in front of the detector,
-        the mass absorption curves of the different phases if a phase map is indicated,
-        and the curve of absorption by the coating layer.
-        """
-        
         E0=self.E0.value
         Cthickness=self.coating_thickness.value
+
+        self.coefficients._number_of_elements=2
+        self.coefficients._create_array()
+        self.coefficients.map['values'][:] = (1,100)
         
         self.quanti._number_of_elements=len(self.model._signal.metadata.Sample.elements)
         self.quanti._create_array()
@@ -265,17 +292,21 @@ class Physical_background(Component):
             self.quanti.map['is_set'][:] = True
             self.quanti.value=self.quanti.map['values'][0,0,:]    
 
-        self._whitelist['Window_absorption']=Windowabsorption(self.model,self._whitelist['detector'])
+        self._whitelist['Window_absorption']=np.array(Windowabsorption(self.model,self._whitelist['detector']),dtype=np.float16)
         
         if self.coating_thickness.value>0:
             self._whitelist['Coating_absroption']=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7))# absorption by the coating layer (1.3 is the density)
+
+        if self._whitelist['quanti']=='Mean':
+            Mu=Mucoef(self.model,self.quanti.value)
+            self._whitelist['Mu']=Mu
 
         carto=self._whitelist['carto']
         if carto is not None:
             Mu=[]
             for i in range (1,int(np.max(carto)+1)):
                 Mu.append(Mucoef(self.model,np.mean(self.quanti.map['values'][carto==i],axis=0)))
-            self._whitelist['Mu']=Mu
+            self._whitelist['Mu']=np.array(Mu,dtype=np.float16)
 
         return {'Quant map and absorption correction parameters have been created'}
         
@@ -283,7 +314,7 @@ class Physical_background(Component):
  
         b=self.coefficients.value[0]
         a=self.coefficients.value[1]
-        
+        #Z=MeanZ(self.model,self.quanti.value)
         
         E0=self.E0.value
         teta=self.teta.value
@@ -295,11 +326,15 @@ class Physical_background(Component):
             Mu=self._whitelist['Mu'][int(phaseN-1)]
             Mu=np.array(Mu,dtype=float)
             Mu=Mu[self.model.channel_switches]
+        elif self._whitelist['quanti']=='Mean':
+            Mu=self._whitelist['Mu']
+            Mu=np.array(Mu,dtype=float)
+            Mu=Mu[self.model.channel_switches]
         else:
             Mu=Mucoef(self.model,self.quanti.value)
             Mu=np.array(Mu,dtype=float)
         
-        Window=np.array(self._whitelist['Window_absorption'],dtype=float)
+        Window=self._whitelist['Window_absorption']
         Window=Window[self.model.channel_switches]
 
         if self.coating_thickness.value>0 :
@@ -314,6 +349,7 @@ class Physical_background(Component):
         absorption=((1-np.exp(-2*Mu*b*10**-5*cosec))/((2*Mu*b*10**-5*cosec))) #love and scott model. 
         METabsorption=(np.exp(-Mu*b*10**-5*cosec)) #CL model
 
+        #Backscatter=1/(1+(0.008*(1-(x-E0))*(Z)))
         
         if self._whitelist['absorption_model'] is 'quadrilateral':
             f=np.where((x>0.17) & (x<(E0)),(emission*absorption*Window*coating),0)
