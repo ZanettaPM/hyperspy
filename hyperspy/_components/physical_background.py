@@ -376,7 +376,7 @@ class Physical_background(Component):
             a5 = -0.005869434977170494
             a6 = 399.2369203698975
             a7 = -1.33063199140076
-            emission=a*((mt*10**-2))*((Z**(1/2))*((E0-x)/x))*(a1+a2*x+a3*np.log(Z)+(a4*E0**a5)/Z)*(1+(a6+a7*E0)*(Z/x))
+            emission=(a*((Z**(1/2))*((E0-x)/x)))*(a1+a2*x+a3*np.log(Z)+(a4*E0**a5)/Z)*(1+(a6+a7*E0)*(Z/x))
         
         absorption=((1-np.exp(-2*Mu*(mt*10**-7)*cosec))/(2*Mu*(mt*10**-7)*cosec))#love and scott model. 
         METabsorption=np.exp(-Mu*(mt*10**-7)*cosec)#Cliff lorimer
