@@ -658,7 +658,8 @@ class EDS_mixin:
         TOA is the angle with which the X-rays leave the surface towards
         the detector. Parameters are read in 'SEM.Stage.tilt_alpha',
         'Acquisition_instrument.SEM.Detector.EDS.azimuth_angle' and
-        'SEM.Detector.EDS.elevation_angle' in 'metadata'.
+        'SEM.Detector.EDS.elevation_angle' and 'SEM.Stage.tilt_beta in
+        'metadata'.
 
         Returns
         -------
@@ -679,7 +680,7 @@ class EDS_mixin:
         hs.eds.take_off_angle
 
         Notes
-        -----
+        -----a
         Defined by M. Schaffer et al., Ultramicroscopy 107(8), pp 587-597
         (2007)
         """
@@ -691,9 +692,12 @@ class EDS_mixin:
         tilt_stage = mp.Stage.tilt_alpha
         azimuth_angle = mp.Detector.EDS.azimuth_angle
         elevation_angle = mp.Detector.EDS.elevation_angle
+        if 'tilt_beta' not in mp.Stage:
+            beta_tilt = 0.0
+        else:
+            beta_tilt = mp.Stage.tilt_beta
 
-        TOA = utils.eds.take_off_angle(tilt_stage, azimuth_angle,
-                                       elevation_angle)
+        TOA = utils.eds.take_off_angle(tilt_stage, azimuth_angle, elevation_angle,beta_tilt)
 
         return TOA
 
