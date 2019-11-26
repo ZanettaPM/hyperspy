@@ -290,26 +290,10 @@ class EDSModel(Model1D):
         self.append(background)
         self.background_components.append(background)
 
-<<<<<<< Updated upstream
 
     def add_physical_background(self, E0='from_metadata', detector='Polymer_C', quantification='Mean',emission_model='Kramer', absorption_model='quadrilateral', coating_thickness=0, TOA='from_metadata', Phase_map=None, correct_for_backscatterring=True):
         """
         Add a background based on physical property of the interraction e-/mater (see Zanetta et al. 2019)
-=======
-    def add_physical_background(self,
-                                E0='from_metadata',
-                                detector='Polymer_C',
-                                quantification='Mean',
-                                emission_model='Kramer',
-                                absorption_model='quadrilateral',
-                                coating_thickness=0,
-                                TOA='from_metadata',
-                                Phase_map=None,
-                                correct_for_backscatterring=True):
-        """
-        Add a background based on physical property of the interraction e-/mater
-        (see Zanetta et al. 2019)
->>>>>>> Stashed changes
     
         the background is added to self.background_components
 
@@ -322,51 +306,38 @@ class EDSModel(Model1D):
 
         detector: str or array
             The string is the type of detector used during the acquisition
-                String can be 'Polymer_C' / 'Super_X' / '12µm_BE' / '25µm_BE'
-                / '100µm_BE' / 'Polymer_C2' / 'Polymer_C3' 
+                String can be 'Polymer_C' / 'Super_X' / '12µm_BE' / '25µm_BE' / '100µm_BE' / 'Polymer_C2' / 'Polymer_C3' 
                 It will be used to calculate the detector efficiency
             An array of value representing the detector efficiency can also be passed
                 
-        quantification: None, Mean, Muti_Base_Signal (result of quantification function)
-        or an array
+        quantification: None, Mean, Muti_Base_Signal (result of quantification function) or an array
             If quantification is None, an approximation based on peaks ratio is used
-            If Mean is passed, a mean spectrum of the entire signal is used for obtaining
-            an approximation of the composition based on peak ratio
-            If the acquisition instrument is a TEM it is more consistent to perform a
-            quantification before the use of "add_physical_background"
-                In this case variable which contain the result of the quantification
-                can be directly filled. The function automatically detect if data are
-                in weight_percent or in atomic_percent
-            Otherwise, an array which contain the quantification
-            (with map dimension and number or elements set in metadata) can be directly passed
+            If Mean is passed, a mean spectrum of the entire signal is used for obtaining an approximation of the composition based on peak ratio
+            If the acquisition instrument is a TEM it is more consistent to perform a quantification before the use of "add_physical_background"
+                In this case variable which contain the result of the quantification can be directly filled
+                The function automatically detect if data are in weight_percent or in atomic_percent
+            Otherwise, an array which contain the quantification (with map dimension and number or elements set in metadata) can be directly passed
                 This quantmap have to be an array not a list !
         Emission_model: str
-            Different model have been inserted in the function, str can be Kramer,
-            Small, Lifshin, Castellano_SEM or Castellano_TEM
-                In the castellano model the coefficients has been estimated
-                based on the microscopes of the Lille university facilities
+            Different model have been inserted in the function, str can be Kramer, Small, Lifshin, Castellano_SEM or Castellano_TEM
+                In the castellano model the coefficients has been estimated based on the microscopes of the Lille university facilities
         absorption_model:  str
             The type of distribution for x-ray generation
             String can be 'quadrilateral' or 'CL'
             The quadrilateral method refers to the quadrilateral model of Love&Scott (see documentation).
-            While 'CL' refers to the cliff lorimer method where the depth distribution of
-            X-ray production is a constant and equal to unity.
+            While 'CL' refers to the cliff lorimer method where the depth distribution of X-ray production is a constant and equal to unity.
         Coating_thickness: float
-            The thickness of the carbon deposit on the sample in nanometers.
-            The Deafault is coating_thickness=0nm.
+            The thickness of the carbon deposit on the sample in nanometers. The Deafault is coating_thickness=0nm.
         TOA
-             TOA(take off angle) is the angle with which the X-rays leave the surface towards the detector.
-             Parameters are read in metadata but an integer can be passed
+             TOA(take off angle) is the angle with which the X-rays leave the surface towards the detector. Parameters are read in metadata but an integer can be passed
         Phase_map: None or array of integer
-            This argument allow to speed up the fit on large map. If a phase map is known,
-            the mass absorption coefficient function is considered to be the same for each pixel of the same phase
+            This argument allow to speed up the fit on large map. If a phase map is known, the mass absorption coefficient function is considered to be the same for each pixel of the same phase
             and is only calculated one time for the entire phase
         Correct_for_backscattering: True or False
             apply a correction for the backscattered electron to the emitted intensities
             
              
-        Caution ! : The number of elements have to be equal to the number of Xray_lines.
-        It's preferable to remove secondary lines and keep only higher energy lines
+        Caution ! : The number of elements have to be equal to the number of Xray_lines. It's preferable to remove secondary lines and keep only higher energy lines
 
         Example:
 
@@ -386,15 +357,7 @@ class EDSModel(Model1D):
         if TOA == 'from_metadata':
             TOA = self.signal.get_take_off_angle()
             
-        background = create_component.Physical_background(E0=E0,
-                                                          detector=detector,
-                                                          quantification=quantification,
-                                                          emission_model=emission_model,
-                                                          absorption_model=absorption_model,
-                                                          coating_thickness=coating_thickness,
-                                                          TOA=TOA,
-                                                          Phase_map=Phase_map,
-                                                          correct_for_backscatterring=correct_for_backscatterring)
+        background = create_component.Physical_background(E0=E0,detector=detector, quantification=quantification, emission_model=emission_model, absorption_model=absorption_model, coating_thickness=coating_thickness,TOA=TOA, Phase_map=Phase_map,correct_for_backscatterring=correct_for_backscatterring)
         background.name = "Bremsstrahlung"
         background.isbackground = True
         self.append(background)
