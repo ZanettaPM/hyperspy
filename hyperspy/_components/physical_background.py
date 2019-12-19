@@ -236,7 +236,7 @@ class Physical_background(Component):
 	This dictionnary is call in the function Wpercent() to calculate an array of weight percent with the same dimension than the model and a length which correspond to the number of elements filled in the metadata
     """
 
-    def __init__(self, E0, detector, quantification, emission_model, absorption_model,TOA,coating_thickness,Phase_map,correct_for_backscatterring):
+    def __init__(self, E0, detector, quantification, emission_model, absorption_model,TOA,coating_thickness,Phase_map,correct_for_backscatterring,standard):
         Component.__init__(self,['coefficients','E0','quanti','teta','coating_thickness'])
 
         self.coefficients._number_of_elements = 3
@@ -250,6 +250,7 @@ class Physical_background(Component):
         self.coating_thickness.value=coating_thickness
         
         self._whitelist['Backscattering_correction'] = correct_for_backscatterring
+        self._whitelist['std'] = standard
         self._whitelist['quanti'] = quantification
         self._whitelist['detector'] = detector
         self._whitelist['emission_model'] = emission_model
@@ -299,6 +300,11 @@ class Physical_background(Component):
         if self.coating_thickness.value>0:
             self._whitelist['Coating_absroption']=(np.exp(-Cabsorption(self.model)*1.3*Cthickness*10**-7*teta))# absorption by the coating layer (1.3 is the density)
 
+        if self._whitelist['quanti']=='Mean'or self._whitelist['std']is True:
+            Mu=Mucoef(self.model,self.quanti.value)
+            self._whitelist['Mu']=Mu
+
+
         if self._whitelist['quanti']=='Mean':
             Mu=Mucoef(self.model,self.quanti.value)
             self._whitelist['Mu']=Mu
@@ -329,7 +335,7 @@ class Physical_background(Component):
             Mu=self._whitelist['Mu'][int(phaseN-1)]
             Mu=np.array(Mu,dtype=float)
             Mu=Mu[self.model.channel_switches]
-        elif self._whitelist['quanti']=='Mean':
+        elif self._whitelist['quanti']=='Mean' or self._whitelist['std']is True:
             Mu=self._whitelist['Mu']
             Mu=np.array(Mu,dtype=float)
             Mu=Mu[self.model.channel_switches]
@@ -369,16 +375,27 @@ class Physical_background(Component):
             emission=a*((Z**(1/2)*((E0-x)/x))*(-a1-a2*x+a3*np.log(Z)+(a4*E0**a5)/Z)*(1+(-a6+a7*E0)*(Z/x)))
 
         if self._whitelist['emission_model'] is 'Castellano_TEM':          
-            a1 = -553.150679202773
+            a1 = -555.40679202773
             a2 = 0.10152130164852309
-            a3 = 134.17405336236044
+            a3 = 134.4405336236044
             a4 = 3150.427300886565
             a5 = -0.005869434977170494
             a6 = 399.2369203698975
-            a7 = -1.33063199140076
+            a7 = -1.330745199140076
+            emission=(a*((Z**(1/2))*((E0-x)/x)))*(a1+a2*x+a3*np.log(Z)+(a4*E0**a5)/Z)*(1+(a6+a7*E0)*(Z/x))
+
+        if self._whitelist['emission_model'] is 'Castellano_TEM2':          
+            a1 = 3.64026854e+02
+            a2 = 7.21202062e+03
+            a3 = 7.70177504e+02
+            a4 = 2.37658301e+01
+            a5 = 1.44207875e-09
+            a6 = 5.42888351e-01
+            a7 = 1.07228837e-04
             emission=(a*((Z**(1/2))*((E0-x)/x)))*(a1+a2*x+a3*np.log(Z)+(a4*E0**a5)/Z)*(1+(a6+a7*E0)*(Z/x))
         
-        absorption=((1-np.exp(-2*Mu*(mt*10**-7)*cosec))/(2*Mu*(mt*10**-7)*cosec))#love and scott model. 
+        absorption=((1-np.exp(-2*Mu*(mt*10**-7)*cosec))/(2*Mu*(mt*10**-7)*cosec))#love and scott model.
+        #absorption=((1-np.exp(-Mu*(mt*10**-7)*cosec))/Mu)#love and scott model. 
         METabsorption=np.exp(-Mu*(mt*10**-7)*cosec)#Cliff lorimer
         
         if self._whitelist['Backscattering_correction'] is True :
@@ -405,7 +422,6 @@ class Physical_background(Component):
         if self._whitelist['absorption_model'] is 'CL':
             f=np.where((x>0.17) & (x<(E0)),(emission*METabsorption*Window*coating*Backscatter),0)
             if not np.all(np.isfinite(f)): #avoid "residuals are not finite in the initial point"
-                self.coefficients.value=(0,0,0)
                 self.coefficients.store_current_value_in_array()
                 return 1
             else:
